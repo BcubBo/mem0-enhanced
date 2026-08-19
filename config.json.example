@@ -19,7 +19,7 @@
     "vector_store": {
       "provider": "qdrant",
       "config": {
-        "url": "http://127.0.0.1:26333",
+        "url": "http://127.0.0.1:6333",
         "api_key": "your-qdrant-api-key",
         "embedding_model_dims": 1024,
         "collection_name": "mem0"
@@ -37,7 +37,7 @@
   },
   "neo4j": {
     "enabled": true,
-    "uri": "bolt://localhost:26787",
+    "uri": "bolt://localhost:7687",
     "username": "neo4j",
     "password": "your-neo4j-password"
   },

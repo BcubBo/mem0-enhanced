@@ -124,7 +124,7 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
     "vector_store": {
       "provider": "qdrant",
       "config": {
-        "url": "http://your-qdrant-host:26333",
+        "url": "http://your-qdrant-host:6333",
         "api_key": "your-qdrant-api-key",
         "embedding_model_dims": 1024,
         "collection_name": "mem0"
@@ -141,7 +141,7 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
   },
   "neo4j": {
     "enabled": true,
-    "uri": "bolt://your-neo4j-host:26787",
+    "uri": "bolt://your-neo4j-host:7687",
     "username": "neo4j",
     "password": "your-neo4j-password"
   },
