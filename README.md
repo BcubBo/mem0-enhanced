@@ -75,7 +75,7 @@ docker run -d \
   --name mem0x \
   -v ~/.mem0x/config.json:/app/config.json \
   -v ~/.mem0x/data:/app/data \
-  -p 28768:28768 \
+  -p 8080:8080 \
   mem0x:0.1.0
 ```
 
@@ -147,7 +147,7 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
   },
   "server": {
     "host": "0.0.0.0",
-    "port": 28768
+    "port": 8080
   }
 }
 ```
