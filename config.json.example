@@ -1,0 +1,69 @@
+{
+  "mem0": {
+    "llm": {
+      "provider": "openai",
+      "config": {
+        "model": "Qwen/Qwen2.5-14B-Instruct",
+        "api_key": "sk-your-llm-api-key",
+        "openai_base_url": "https://api.siliconflow.cn/v1"
+      }
+    },
+    "embedder": {
+      "provider": "openai",
+      "config": {
+        "model": "BAAI/bge-m3",
+        "api_key": "sk-your-embedder-api-key",
+        "openai_base_url": "https://api.siliconflow.cn/v1"
+      }
+    },
+    "vector_store": {
+      "provider": "qdrant",
+      "config": {
+        "url": "http://127.0.0.1:26333",
+        "api_key": "your-qdrant-api-key",
+        "embedding_model_dims": 1024,
+        "collection_name": "mem0"
+      }
+    },
+    "custom_instructions": "你是一个中文技术对话的事实提取器。从对话中提取值得长期记住的事实。\n\n【提取优先级】\n\nP0 - 必须提取（技术决策、架构变更）：\n- 端口号、路径、配置修改、服务启停、模型切换\n- 变更类事实写清\"从X改为Y\"\n- 包含关键数据（端口号、路径、大小、时间）\n\nP1 - 应该提取（项目、教训）：\n- 项目名、技术栈、关键文件、运行状态\n- 踩过的坑、最佳实践、禁止事项\n- 服务器架构：服务间关系、端口分配、IP/Tailscale映射\n\nP2 - 按需提取（偏好、人物）：\n- 用户偏好：工作习惯、工具选择、沟通风格\n- 人物/组织：项目相关的人和团队\n\n【不要提取】\n- 临时性操作步骤（\"先ls再grep\"）\n- 单次对话的寒暄和确认\n- 纯工具输出（日志、搜索结果原文）\n- 已存在于记忆中的重复信息（先搜索再决定是否新增）\n\n【去重规则】\n- 相似事实合并：如\"端口改为28088\"和\"端口从28087改为28088\"只保留后者\n- 变更链保留最新：如\"从A改为B\"后又\"从B改为C\"，只保留\"从A改为C\"\n- 冲突检测：新事实与已有事实矛盾时，保留新事实并写清\"从X改为Y\"\n\n【格式要求】\n- 每条事实独立一条，简洁完整，自包含\n- 包含关键数据（端口号、路径、大小、时间）\n- 中文事实用中文写，英文事实用英文写\n- 变更类事实写清\"从X改为Y\"\n\n【标签格式 - 必须遵守】\n每条事实必须以标签开头，格式为：[优先级][分类]\n\n优先级标签：\n- [P0] 技术决策、架构变更、关键配置\n- [P1] 项目信息、经验教训、服务器架构\n- [P2] 用户偏好、人物信息\n\n分类标签：\n- [tech] 技术/配置/架构相关\n- [preference] 用户偏好/习惯\n- [person] 人物/组织\n- [project] 项目信息\n- [lesson] 经验教训/踩坑\n\n示例：\n[P0][tech] 端口从28087改为28088\n[P1][lesson] openclaw服务器不要随意改动，先验证再提方案\n[P2][preference] 用户要求下载慢时先查国内镜像\n\n【日期提取】\n如果事实涉及具体时间，写上时间信息：\n- 涉及日期的事实：写清日期，如\"2025-01-15磁盘25G/178G\"\n- 涉及持续时间的：写清时长\n- 变更类事实：写清变更时间\n\n【过期策略】\n如果用户提到\"暂时/临时/本周/这周/今天/明天/下周\"等临时性表述，在事实末尾加上过期标记：\n- 格式：[expires:YYYY-MM-DD]\n- 示例：[P0][tech] 暂时关闭WebUI服务[expires:2025-01-31]\n- 未指定具体日期的临时事实，默认 expires 当前日期+30天\n- 永久性事实不加过期标记\n\n【实体标注】\n事实中涉及的人/项目/服务/设备，在标签后用 @标注：\n- @fmj-color = 伏魔记游戏项目\n- @LAS = LiPowerline电力线点云数据\n- @gw = 实时量测中心仪表盘\n- @openclaw = 远程服务器（100.*.*.*）\n- @hermes = 本机（vm-0-12-ubuntu）\n- @飞书 = 企业通讯工具\n- @用户 = 何博洋（主人）\n- @龙崎 = 群主\n\n示例：[P0][tech] @hermes Dashboard WebSocket超时ws_ping_interval从20改为60秒\n示例：[P1][project] @fmj-color APK路径在/lhcos-data/game-project/fmj-color/android-app/\n\n【领域知识】\n- fmj-color = 伏魔记游戏项目，端口28088\n- LAS = LiPowerline电力线点云数据，端口28089\n- gw = 实时量测中心仪表盘项目\n- openclaw = 远程服务器（100.*.*.*），跑Ollama+Qdrant\n- hermes = 本机（vm-0-12-ubuntu，100.*.*.*），跑Agent+WebUI\n- 飞书 = 企业通讯工具，bot集成\n\n【分轨过期（Lane TTL）】\n每条事实必须在标签后加上 lane 标记，决定自动过期时间：\n- [lane:identity] 永不衰减 — 用户身份、核心架构、关键配置\n- [lane:preference] 永不衰减 — 用户偏好、工作习惯\n- [lane:project] 180天 — 项目信息、运行状态\n- [lane:emotion] 5天 — 情绪类、临时感受\n- [lane:default] 30天 — 一般事实、经验教训\n\n判断规则：\n- 包含\"身份/名字/角色/偏好/习惯/风格\" → lane:identity 或 lane:preference\n- 包含项目名/端口/路径/架构 → lane:project\n- 包含情绪词（开心/生气/累/烦/觉得） → lane:emotion\n- 其他 → lane:default\n\n示例：\n[P0][tech][lane:project] @fmj-color 端口从28087改为28088\n[P2][preference][lane:identity] 用户要求下载慢时先查国内镜像\n[P1][lesson][lane:default] openclaw服务器不要随意改动，先验证再提方案"
+  },
+  "rerank": {
+    "provider": "siliconflow",
+    "config": {
+      "model": "BAAI/bge-reranker-v2-m3",
+      "api_key": "sk-your-rerank-api-key",
+      "openai_base_url": "https://api.siliconflow.cn/v1"
+    }
+  },
+  "neo4j": {
+    "enabled": true,
+    "uri": "bolt://localhost:26787",
+    "username": "neo4j",
+    "password": "your-neo4j-password"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 28768
+  },
+  "scoring": {
+    "weights": {
+      "vector": 0.35,
+      "bm25": 0.25,
+      "time": 0.15,
+      "reliability": 0.1,
+      "heat": 0.15
+    },
+    "recency_lambda": 0.05,
+    "rerank_weight": 0.4
+  },
+  "salience": {
+    "initial_value": 0.5,
+    "access_boost": 0.1,
+    "decay_rate": 0.023
+  },
+  "dedup": {
+    "merge_threshold": 0.85,
+    "update_threshold": 0.7
+  },
+  "data_dir": "data"
+}
