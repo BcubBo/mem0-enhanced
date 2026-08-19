@@ -109,7 +109,7 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
       "provider": "openai",
       "config": {
         "model": "Qwen/Qwen2.5-14B-Instruct",
-        "api_key": "sk-your-api-key",
+        "api_key": "sk-your-llm-api-key",
         "openai_base_url": "https://api.siliconflow.cn/v1"
       }
     },
@@ -117,14 +117,14 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
       "provider": "openai",
       "config": {
         "model": "BAAI/bge-m3",
-        "api_key": "sk-your-api-key",
+        "api_key": "sk-your-embedder-api-key",
         "openai_base_url": "https://api.siliconflow.cn/v1"
       }
     },
     "vector_store": {
       "provider": "qdrant",
       "config": {
-        "url": "http://127.0.0.1:26333",
+        "url": "http://your-qdrant-host:26333",
         "api_key": "your-qdrant-api-key",
         "embedding_model_dims": 1024,
         "collection_name": "mem0"
@@ -135,13 +135,13 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
     "provider": "siliconflow",
     "config": {
       "model": "BAAI/bge-reranker-v2-m3",
-      "api_key": "sk-your-api-key",
+      "api_key": "sk-your-rerank-api-key",
       "openai_base_url": "https://api.siliconflow.cn/v1"
     }
   },
   "neo4j": {
     "enabled": true,
-    "uri": "bolt://127.0.0.1:26787",
+    "uri": "bolt://your-neo4j-host:26787",
     "username": "neo4j",
     "password": "your-neo4j-password"
   },
