@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY wrapper/ ./wrapper/
 COPY security/ ./security/
 COPY api_server.py .
+COPY audit_log.py .
 
 # 创建数据目录
 RUN mkdir -p /app/data
