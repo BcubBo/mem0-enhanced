@@ -79,13 +79,17 @@ def _is_expired(memory_text: str, created_at: Optional[str] = None) -> bool:
     return False
 
 
-def run_expire_cycle(memory, neo4j_hook=None) -> int:
+def run_expire_cycle(memory, neo4j_hook=None, filters=None) -> int:
     """执行一轮过期清理，返回删除数量。
 
     Args:
         memory: mem0 实例
         neo4j_hook: Neo4j hook 实例（可选），用于同步清理图谱
+        filters: 搜索过滤器（默认只清理 bo 用户）
     """
+    if filters is None:
+        filters = {"user_id": "bo"}
+    
     deleted = 0
     try:
         # 搜索所有记忆（分页扫描）
@@ -95,7 +99,7 @@ def run_expire_cycle(memory, neo4j_hook=None) -> int:
             # 使用占位符查询获取记忆
             results = memory.search(
                 query="记忆",
-                filters={},
+                filters=filters,
                 top_k=batch_size,
                 offset=offset,
             )
