@@ -354,10 +354,16 @@ async def delete_memory(req: DeleteRequest):
     安全策略：软删除 — 标记 deleted_at，搜索时过滤。
     硬删除需通过 /delete/confirm 端点。
     """
+    import re
     from datetime import datetime, timezone
+    
+    # 1. 格式校验
+    if not req.memory_id or not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', req.memory_id, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Invalid memory_id format (must be UUID)")
+    
     memory = get_memory()
-
-    # 软删除：更新 metadata 标记 deleted_at
+    
+    # 2. 软删除：更新 metadata 标记 deleted_at
     try:
         memory.update(
             req.memory_id,
@@ -365,8 +371,8 @@ async def delete_memory(req: DeleteRequest):
             metadata={"deleted_at": datetime.now(timezone.utc).isoformat()},
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"mem0 soft-delete failed: {e}")
-
+        raise HTTPException(status_code=400, detail=f"Delete failed: {e}")
+    
     return {"status": "ok", "memory_id": req.memory_id, "action": "soft_deleted"}
 
 
@@ -376,28 +382,34 @@ async def delete_memory_confirm(req: DeleteRequest):
 
     调用方需显式调用此端点才能真正删除。
     """
+    import re
+    
+    # 1. 格式校验
+    if not req.memory_id or not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', req.memory_id, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Invalid memory_id format (must be UUID)")
+    
     memory = get_memory()
-
-    # 1. mem0 删除（Qdrant）
+    
+    # 2. mem0 删除（Qdrant）
     try:
         memory.delete(req.memory_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"mem0 delete failed: {e}")
-
-    # 2. salience 清理
+        raise HTTPException(status_code=400, detail=f"Delete failed: {e}")
+    
+    # 3. salience 清理
     try:
         salience_delete(req.memory_id)
     except Exception as e:
         logger.debug("salience delete 失败: %s", e)
-
-    # 3. Neo4j 清理
+    
+    # 4. Neo4j 清理
     try:
         hook = get_hook()
         if hook.enabled:
             hook.cleanup(req.memory_id)
     except Exception as e:
         logger.debug("neo4j cleanup 失败: %s", e)
-
+    
     return {"status": "ok", "memory_id": req.memory_id, "action": "hard_deleted"}
 
 

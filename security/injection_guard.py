@@ -154,7 +154,8 @@ def check_prompt_injection(content: str) -> Tuple[bool, str]:
         try:
             decoded = _b64.b64decode(candidate).decode('utf-8', errors='ignore')
             if len(decoded) >= 10:
-                d_check, _ = check_prompt_injection(decoded)
+                # 先归一化大小写，再递归检测
+                d_check, _ = check_prompt_injection(decoded.lower())
                 if d_check:
                     return True, f"L4 base64 decoded injection: '{decoded[:40]}'"
         except (binascii.Error, ValueError):

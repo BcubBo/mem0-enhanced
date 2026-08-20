@@ -199,7 +199,23 @@ class Mem0RemoteProvider:
     def handle_tool_call(self, tool_name: str, args: dict) -> str:
         """处理工具调用。返回 JSON 字符串。"""
         client = _get_client()
-
+        
+        # PII 拦截（插件层本地检查）
+        if tool_name in ("mem0_add", "mem0_update"):
+            content = args.get("content", "")
+            if content:
+                import re
+                # 身份证、手机、邮箱、密码明文
+                pii_patterns = [
+                    r'(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)',  # 身份证
+                    r'(?<!\d)1[3-9]\d{9}(?!\d)',  # 手机号
+                    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # 邮箱
+                    r'(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S+',  # 密码明文
+                ]
+                for pattern in pii_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        return json.dumps({"error": "PII detected in content, rejected for security"})
+        
         if tool_name == "mem0_add":
             content = args.get("content", "")
             result = client.try_request("POST", "/add", body={
