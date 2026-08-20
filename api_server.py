@@ -85,6 +85,23 @@ async def lifespan(app: FastAPI):
     logger.info("mem0x 启动中...")
     config = load_config()
 
+    # 加载脱敏名称映射（从 config.json 的 redact_names 字段）
+    try:
+        from security.pipeline import load_redact_names as _load_pipeline_redact
+        _load_pipeline_redact(config)
+    except Exception as e:
+        logger.debug("pipeline redact_names 加载失败: %s", e)
+    try:
+        from wrapper.neo4j_hook import load_redact_names as _load_neo4j_redact
+        _load_neo4j_redact(config)
+    except Exception as e:
+        logger.debug("neo4j redact_names 加载失败: %s", e)
+    try:
+        from wrapper.neo4j_hook import load_known_entities as _load_entities
+        _load_entities(config)
+    except Exception as e:
+        logger.debug("neo4j known_entities 加载失败: %s", e)
+
     # 初始化 mem0 单例
     try:
         mem = get_memory(config)
@@ -255,6 +272,12 @@ async def search_memory(req: SearchRequest):
         logger.warning("mem0 search 失败: %s", e)
         results = []
 
+    # 过滤软删除的记忆（metadata.deleted_at 存在则跳过）
+    results = [
+        r for r in results
+        if not (isinstance(r.get("metadata"), dict) and r["metadata"].get("deleted_at"))
+    ]
+
     # 时间窗口过滤
     if req.before or req.after:
         results = _filter_by_time(results, req.before, req.after)
@@ -326,7 +349,33 @@ async def search_memory(req: SearchRequest):
 
 @app.post("/delete")
 async def delete_memory(req: DeleteRequest):
-    """删除记忆（级联清理 Qdrant + salience + Neo4j）。"""
+    """删除记忆（级联清理 Qdrant + salience + Neo4j）。
+
+    安全策略：软删除 — 标记 deleted_at，搜索时过滤。
+    硬删除需通过 /delete/confirm 端点。
+    """
+    from datetime import datetime, timezone
+    memory = get_memory()
+
+    # 软删除：更新 metadata 标记 deleted_at
+    try:
+        memory.update(
+            req.memory_id,
+            text=None,  # 不改内容，只改 metadata
+            metadata={"deleted_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"mem0 soft-delete failed: {e}")
+
+    return {"status": "ok", "memory_id": req.memory_id, "action": "soft_deleted"}
+
+
+@app.post("/delete/confirm")
+async def delete_memory_confirm(req: DeleteRequest):
+    """硬删除记忆（级联清理 Qdrant + salience + Neo4j）。
+
+    调用方需显式调用此端点才能真正删除。
+    """
     memory = get_memory()
 
     # 1. mem0 删除（Qdrant）
@@ -349,23 +398,41 @@ async def delete_memory(req: DeleteRequest):
     except Exception as e:
         logger.debug("neo4j cleanup 失败: %s", e)
 
-    return {"status": "ok", "memory_id": req.memory_id}
+    return {"status": "ok", "memory_id": req.memory_id, "action": "hard_deleted"}
 
 
 @app.post("/update")
 async def update_memory(req: UpdateRequest):
-    """更新记忆内容（Qdrant + Neo4j 双端同步）。"""
+    """更新记忆内容（Qdrant + Neo4j 双端同步）。
+
+    安全链路：注入防御 → PII 脱敏 → 更新
+    """
+    from security.pipeline import redact_pii
+    from security.injection_guard import validate_memory_content
+
     memory = get_memory()
+
+    # 安全检查：注入防御
+    is_valid, cleaned_content, reject_reason = validate_memory_content(req.content)
+    if not is_valid or not cleaned_content:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Content rejected: {reject_reason or 'empty content'}",
+        )
+
+    # PII 脱敏
+    cleaned_content = redact_pii(cleaned_content)
+
     try:
         # 1. 更新 Qdrant
-        memory.update(req.memory_id, req.content, metadata=req.metadata)
+        memory.update(req.memory_id, cleaned_content, metadata=req.metadata)
 
         # 2. 同步更新 Neo4j（先删后写）
         try:
             hook = get_hook()
             if hook.enabled:
                 hook.cleanup(req.memory_id)
-                hook.write(req.memory_id, req.content)
+                hook.write(req.memory_id, cleaned_content)
         except Exception as e:
             logger.debug("neo4j update 失败: %s", e)
 

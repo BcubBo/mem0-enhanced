@@ -1,0 +1,71 @@
+{
+  "mem0": {
+    "llm": {
+      "provider": "openai",
+      "config": {
+        "model": "Qwen/Qwen2.5-14B-Instruct",
+        "api_key": "YOUR_API_KEY",
+        "openai_base_url": "https://api.siliconflow.cn/v1"
+      }
+    },
+    "embedder": {
+      "provider": "openai",
+      "config": {
+        "model": "BAAI/bge-m3",
+        "api_key": "YOUR_API_KEY",
+        "openai_base_url": "https://api.siliconflow.cn/v1"
+      }
+    },
+    "vector_store": {
+      "provider": "qdrant",
+      "config": {
+        "url": "http://qdrant:6333",
+        "api_key": "YOUR_QDRANT_API_KEY",
+        "embedding_model_dims": 1024,
+        "collection_name": "mem0"
+      }
+    },
+    "custom_instructions": "你是中文技术对话的事实提取器。"
+  },
+  "rerank": {
+    "provider": "siliconflow",
+    "config": {
+      "model": "BAAI/bge-reranker-v2-m3",
+      "api_key": "YOUR_API_KEY",
+      "openai_base_url": "https://api.siliconflow.cn/v1"
+    }
+  },
+  "neo4j": {
+    "enabled": true,
+    "uri": "bolt://neo4j:7687",
+    "username": "neo4j",
+    "password": "YOUR_NEO4J_PASSWORD"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 28768
+  },
+  "scoring": {
+    "weights": {
+      "vector": 0.35,
+      "bm25": 0.25,
+      "time": 0.15,
+      "reliability": 0.1,
+      "heat": 0.15
+    },
+    "recency_lambda": 0.05,
+    "rerank_weight": 0.4
+  },
+  "salience": {
+    "initial_value": 0.5,
+    "access_boost": 0.1,
+    "decay_rate": 0.023
+  },
+  "dedup": {
+    "merge_threshold": 0.85,
+    "update_threshold": 0.7
+  },
+  "data_dir": "data",
+  "redact_names": {},
+  "known_persons": []
+}

@@ -15,13 +15,42 @@ from .self_edit import self_edit_on_add
 
 logger = logging.getLogger("bMem0X.pipeline")
 
-# ── 脱敏配置 ──
-_REDACT_MAP: dict[str, str] = {
-    "何博洋": "admin",
-}
-_REDACT_RE = re.compile(
-    "|".join(re.escape(k) for k in sorted(_REDACT_MAP, key=len, reverse=True))
-) if _REDACT_MAP else None
+# ── 脱敏配置（从 config.json 加载，不硬编码） ──
+_REDACT_MAP: dict[str, str] = {}
+_REDACT_RE = None
+
+
+def load_redact_names(config: dict) -> None:
+    """从 config.json 的 redact_names 字段加载脱敏映射。
+
+    config.json 示例：
+    {
+      "redact_names": {
+        "真实姓名": "脱敏代号"
+      }
+    }
+    """
+    global _REDACT_MAP, _REDACT_RE
+    names = config.get("redact_names", {})
+    if names:
+        _REDACT_MAP = dict(names)
+        _REDACT_RE = re.compile(
+            "|".join(re.escape(k) for k in sorted(_REDACT_MAP, key=len, reverse=True))
+        )
+        logger.info("loaded %d redact names from config", len(_REDACT_MAP))
+
+# ── PII 正则（身份证/手机/邮箱） ──
+# 18位身份证：6位地区 + 8位生日 + 3位顺序 + 1位校验
+_ID_CARD_RE = re.compile(r"(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)")
+# 11位手机号：1[3-9]开头，前后不能紧跟数字（兼容中文环境，不用\b）
+_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+# 邮箱
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+# 密码明文模式（常见标记后的值）
+_PASSWORD_RE = re.compile(
+    r"(密码|password|passwd|secret|token|api[_\-]?key)\s*[:：=]\s*\S+",
+    re.IGNORECASE,
+)
 
 
 def add_redact_name(name: str, replacement: str) -> None:
@@ -34,12 +63,38 @@ def add_redact_name(name: str, replacement: str) -> None:
 
 
 def redact_pii(text: str) -> str:
-    """脱敏处理：将已知真实姓名替换为脱敏名称。"""
-    if not _REDACT_RE or not text:
+    """脱敏处理：姓名替换 + PII 拦截（身份证/手机/邮箱/密码）。
+
+    姓名：替换为脱敏名称
+    身份证/手机/邮箱：替换为 [REDACTED_XXX]
+    密码明文：替换为 [REDACTED_PWD]
+    """
+    if not text:
         return text
-    result = _REDACT_RE.sub(lambda m: _REDACT_MAP[m.group()], text)
+
+    result = text
+
+    # 1. 姓名替换
+    if _REDACT_RE:
+        result = _REDACT_RE.sub(lambda m: _REDACT_MAP[m.group()], result)
+
+    # 2. PII 拦截
+    pii_found = False
+    if _ID_CARD_RE.search(result):
+        result = _ID_CARD_RE.sub("[REDACTED_ID]", result)
+        pii_found = True
+    if _PHONE_RE.search(result):
+        result = _PHONE_RE.sub("[REDACTED_PHONE]", result)
+        pii_found = True
+    if _EMAIL_RE.search(result):
+        result = _EMAIL_RE.sub("[REDACTED_EMAIL]", result)
+        pii_found = True
+    if _PASSWORD_RE.search(result):
+        result = _PASSWORD_RE.sub(r"\1=[REDACTED_PWD]", result)
+        pii_found = True
+
     if result != text:
-        logger.info("PII redacted")
+        logger.info("PII redacted (pii=%s)", pii_found)
     return result
 
 

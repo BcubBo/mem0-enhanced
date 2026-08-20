@@ -49,10 +49,19 @@ MAX_EXTRA_TEXTS = 50
 MAX_TEXT_LEN = 2000
 
 # ── 已知实体类型 ──
-_PERSON_NAMES = frozenset({"何博洋", "龙崎", "马展鹏", "小马哥", "阿玛特拉斯", "漆黑烈焰使", "邪王真眼"})
+_PERSON_NAMES: frozenset = frozenset()
 _KNOWN_PROJECTS = frozenset({"lark-hls-v2", "mem0-enhanced", "伏魔记", "hermes", "玄铁"})
 _KNOWN_SERVICES = frozenset({"Qdrant", "Neo4j", "Gateway", "飞书", "Feishu", "Caddy", "Prometheus", "Grafana"})
 _KNOWN_TOOLS = frozenset({"git", "docker", "hermes", "curl", "pytest"})
+
+
+def load_known_entities(config: dict) -> None:
+    """从 config.json 的 known_persons 字段加载人名列表（不硬编码在源码中）。"""
+    global _PERSON_NAMES
+    names = config.get("known_persons", [])
+    if names:
+        _PERSON_NAMES = frozenset(names)
+        logger.info("neo4j: loaded %d known persons", len(_PERSON_NAMES))
 
 
 def _guess_type(name: str) -> str:
@@ -74,10 +83,43 @@ def _guess_type(name: str) -> str:
 def _sanitize_name(name: str, max_len: int = 200) -> str:
     import unicodedata
     name = ''.join(c for c in name if unicodedata.category(c) != 'Cc')
-    name = re.sub(r'[{}()\[\]|*`$\\"\'"]', '', name)
-    name = re.sub(r'[""''「」『』【】]', '', name)
+    name = re.sub(r'[{}\[\]|*`$\\\"\'"]', '', name)
+    name = re.sub(r'[\u201c\u201d\u2018\u2019\u300c\u300d\u300e\u300f\u3010\u3011]', '', name)
     name = name.strip()
     return name[:max_len]
+
+
+# ── PII 实体过滤 ──
+_PII_PATTERNS = re.compile(
+    r"(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"  # 身份证
+    r"|(?<!\d)1[3-9]\d{9}(?!\d)"       # 手机号
+    r"|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"  # 邮箱
+)
+
+
+def _is_pii_entity(name: str) -> bool:
+    """检查实体名是否包含 PII 信息。"""
+    return bool(_PII_PATTERNS.search(name))
+
+
+# 已知真实姓名 → 脱敏名称映射（从 config.json 加载，不硬编码）
+_PII_NAME_MAP: dict[str, str] = {}
+
+
+def load_redact_names(config: dict) -> None:
+    """从 config.json 的 redact_names 字段加载脱敏映射。"""
+    global _PII_NAME_MAP
+    _PII_NAME_MAP = dict(config.get("redact_names", {}))
+    if _PII_NAME_MAP:
+        logger.info("neo4j: loaded %d redact names", len(_PII_NAME_MAP))
+
+
+def _redact_entity_name(name: str) -> str:
+    """脱敏实体名中的真实姓名。"""
+    for real, fake in _PII_NAME_MAP.items():
+        if real in name:
+            name = name.replace(real, fake)
+    return name
 
 
 def _extract_entities(text: str) -> Dict[str, List]:
@@ -159,7 +201,10 @@ class Neo4jHook:
         return self._enabled
 
     def write(self, memory_id: str, text: str) -> None:
-        """写入记忆后，提取实体+关系写入 Neo4j（带 source_memory_id）。"""
+        """写入记忆后，提取实体+关系写入 Neo4j（带 source_memory_id）。
+
+        PII 过滤：跳过含身份证/手机/邮箱的实体，脱敏真实姓名。
+        """
         if not self._enabled or not self._driver:
             return
 
@@ -172,6 +217,20 @@ class Neo4jHook:
 
         if len(entities) > MAX_WRITE_ENTITIES:
             entities = entities[:MAX_WRITE_ENTITIES]
+
+        # PII 过滤：跳过含敏感信息的实体，脱敏真实姓名
+        filtered_entities = []
+        for entity in entities:
+            name = entity.get("name", "")
+            if _is_pii_entity(name):
+                logger.debug("neo4j: skip PII entity: %s", name[:20])
+                continue
+            entity["name"] = _redact_entity_name(name)
+            filtered_entities.append(entity)
+        entities = filtered_entities
+
+        if not entities:
+            return
 
         # 写入实体（带 source_memory_id）
         with self._driver.session() as session:
