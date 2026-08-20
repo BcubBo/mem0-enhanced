@@ -17,59 +17,6 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("hermes_plugins.mem0x")
 
-# 尝试导入 lark-hls-v2 的 contextvars，用于获取 sender 信息
-_msg_ctx = None
-try:
-    from hermes_plugins.lark_hls_v2.interceptors import _msg_ctx as _lark_msg_ctx
-    _msg_ctx = _lark_msg_ctx
-except ImportError:
-    logger.debug("mem0x: lark-hls-v2 not available, sender context disabled")
-
-# 全局变量，用于在 sync_turn 时保存 sender 信息
-_sender_context_cache: Dict[str, str] = {}
-
-
-def _get_sender_context() -> Dict[str, str]:
-    """从 lark-hls-v2 的 _msg_ctx 读取 sender 信息。"""
-    global _sender_context_cache
-    # 优先从缓存读取（sync_turn 场景）
-    if _sender_context_cache:
-        logger.info("[mem0x-debug] _get_sender_context: from cache=%s", _sender_context_cache)
-        return dict(_sender_context_cache)
-    if _msg_ctx is None:
-        logger.info("[mem0x-debug] _get_sender_context: _msg_ctx is None")
-        return {}
-    ctx = _msg_ctx.get(None)
-    if not ctx:
-        logger.info("[mem0x-debug] _get_sender_context: ctx is None/empty")
-        return {}
-    result = {
-        "sender_open_id": ctx.get("user_id", ""),  # 用 sender_open_id 避免被 mem0 提取为顶层 user_id
-        "user_name": ctx.get("user_name", ""),
-        "chat_id": ctx.get("chat_id", ""),
-        "chat_type": ctx.get("chat_type", "dm"),
-        "message_id": ctx.get("message_id", ""),
-        "platform": ctx.get("platform", ""),
-    }
-    # 自动保存到缓存，供 sync_turn 后台线程使用
-    _sender_context_cache = dict(result)
-    logger.info("[mem0x-debug] _get_sender_context: from ctxvar=%s (cached)", result)
-    return result
-
-
-def _set_sender_context_cache(ctx: Dict[str, str]) -> None:
-    """设置 sender 上下文缓存（由 lark-hls-v2 调用）。"""
-    global _sender_context_cache
-    _sender_context_cache = {
-        "sender_open_id": ctx.get("user_id", ""),
-        "user_name": ctx.get("user_name", ""),
-        "chat_id": ctx.get("chat_id", ""),
-        "chat_type": ctx.get("chat_type", "dm"),
-        "message_id": ctx.get("message_id", ""),
-        "platform": ctx.get("platform", ""),
-    }
-    logger.info("[mem0x-debug] _set_sender_context_cache: cache=%s", _sender_context_cache)
-
 
 # ═══════════════════════════════════════════════════
 # HTTP 客户端（零依赖）
@@ -173,13 +120,7 @@ class Mem0RemoteProvider:
     def prefetch(self, query: str, session_id: str = "", **kwargs) -> str:
         """预取记忆（注入 system prompt）。"""
         client = _get_client()
-        sender = _get_sender_context()
-        body = {
-            "query": query,
-            "limit": 5,
-            "rerank": True,
-            "metadata": sender if sender else None,
-        }
+        body = {"query": query, "limit": 5, "rerank": True}
         result = client.try_request("POST", "/search", body=body, timeout=6.0)
         if not result:
             return ""
@@ -200,17 +141,13 @@ class Mem0RemoteProvider:
         """对话后异步写入记忆。"""
         def _write():
             client = _get_client()
-            sender = _get_sender_context()
             content = f"User: {user_msg}\nAssistant: {assistant_msg}"
-            body = {
+            client.try_request("POST", "/add", body={
                 "messages": content,
                 "user_id": _get_user_id(),
                 "agent_id": _get_agent_id(),
                 "infer": True,
-                "metadata": sender if sender else None,
-            }
-            logger.info("[mem0x-debug] sync_turn: sender=%s, metadata=%s", sender, body.get("metadata"))
-            client.try_request("POST", "/add", body=body, timeout=20.0)
+            }, timeout=20.0)
 
         threading.Thread(target=_write, daemon=True).start()
 
@@ -262,37 +199,44 @@ class Mem0RemoteProvider:
     def handle_tool_call(self, tool_name: str, args: dict) -> str:
         """处理工具调用。返回 JSON 字符串。"""
         client = _get_client()
-        sender = _get_sender_context()
-
+        
+        # PII 脱敏（插件层本地处理）
+        if tool_name in ("mem0_add", "mem0_update"):
+            content = args.get("content", "")
+            if content:
+                import re
+                # 身份证、手机、邮箱、密码明文 → 脱敏替换
+                pii_replacements = [
+                    (r'(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)', '[REDACTED_ID]'),
+                    (r'(?<!\d)1[3-9]\d{9}(?!\d)', '[REDACTED_PHONE]'),
+                    (r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[REDACTED_EMAIL]'),
+                    (r'(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S+', r'\1=[REDACTED]'),
+                ]
+                for pattern, replacement in pii_replacements:
+                    content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
+                args["content"] = content
+        
         if tool_name == "mem0_add":
             content = args.get("content", "")
-            body = {
+            result = client.try_request("POST", "/add", body={
                 "messages": content,
                 "user_id": _get_user_id(),
                 "agent_id": _get_agent_id(),
                 "infer": False,
-                "metadata": sender if sender else None,
-            }
-            result = client.try_request("POST", "/add", body=body, timeout=20.0)
+            }, timeout=20.0)
 
         elif tool_name == "mem0_search":
             query = args.get("query", "")
             top_k = args.get("top_k", 10)
-            body = {
+            result = client.try_request("POST", "/search", body={
                 "query": query,
                 "limit": top_k,
                 "rerank": True,
-                "metadata": sender if sender else None,
-            }
-            result = client.try_request("POST", "/search", body=body, timeout=6.0)
+            }, timeout=6.0)
 
         elif tool_name == "mem0_delete":
             memory_id = args.get("memory_id", "")
-            confirm = args.get("confirm", False)
-            # confirm=True → 硬删除（/delete/confirm）
-            # confirm=False → 软删除（/delete），标记 deleted_at
-            endpoint = "/delete/confirm" if confirm else "/delete"
-            result = client.try_request("POST", endpoint, body={
+            result = client.try_request("POST", "/delete", body={
                 "memory_id": memory_id,
             }, timeout=6.0)
 
@@ -347,12 +291,11 @@ SEARCH_SCHEMA = {
 
 DELETE_SCHEMA = {
     "name": "mem0_delete",
-    "description": "删除长期记忆。默认软删除（标记 deleted_at），confirm=True 硬删除。",
+    "description": "删除长期记忆。",
     "parameters": {
         "type": "object",
         "properties": {
             "memory_id": {"type": "string", "description": "记忆 ID"},
-            "confirm": {"type": "boolean", "description": "是否硬删除（默认 false=软删除）", "default": False},
         },
         "required": ["memory_id"],
     },

@@ -43,7 +43,6 @@ from wrapper import version_tracker
 from security.pipeline import safe_add
 from security.scoring import score_and_rank
 from security.degradation import DegradationTracker
-from audit_log import get_audit_logger
 
 
 # ═══════════════════════════════════════════════════
@@ -67,7 +66,6 @@ class SearchRequest(BaseModel):
     rerank: bool = Field(default=True, description="是否 rerank")
     before: Optional[str] = Field(default=None, description="时间上限 ISO 格式")
     after: Optional[str] = Field(default=None, description="时间下限 ISO 格式")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="按 metadata 过滤（如 user_id, chat_id）")
 
 
 class DeleteRequest(BaseModel):
@@ -260,26 +258,6 @@ async def add_memory(req: AddRequest, request: Request):
 
     elapsed_ms = int((time.time() - start) * 1000)
     result["elapsed_ms"] = elapsed_ms
-
-    # 审计日志
-    try:
-        audit = get_audit_logger()
-        if audit:
-            sender_meta = req.metadata or {}
-            audit.log_add(
-                sender_open_id=sender_meta.get("sender_open_id", ""),
-                user_name=sender_meta.get("user_name", ""),
-                chat_id=sender_meta.get("chat_id", ""),
-                chat_type=sender_meta.get("chat_type", ""),
-                platform=sender_meta.get("platform", ""),
-                content=content,
-                result=result.get("action", ""),
-                memory_id=result.get("memory_id", ""),
-                metadata=sender_meta,
-            )
-    except Exception as e:
-        logger.debug("审计日志记录失败: %s", e)
-
     return result
 
 
@@ -314,18 +292,6 @@ async def search_memory(req: SearchRequest, request: Request):
         r for r in results
         if not (isinstance(r.get("metadata"), dict) and r["metadata"].get("deleted_at"))
     ]
-
-    # 按 metadata 过滤（如 user_id, chat_id）
-    if req.metadata and isinstance(req.metadata, dict):
-        def _metadata_matches(r):
-            meta = r.get("metadata", {})
-            if not isinstance(meta, dict):
-                return False
-            for key, value in req.metadata.items():
-                if value and meta.get(key) != value:
-                    return False
-            return True
-        results = [r for r in results if _metadata_matches(r)]
 
     # 时间窗口过滤
     if req.before or req.after:
@@ -400,24 +366,6 @@ async def search_memory(req: SearchRequest, request: Request):
             })
 
     elapsed_ms = int((time.time() - start) * 1000)
-
-    # 审计日志
-    try:
-        audit = get_audit_logger()
-        if audit:
-            sender_meta = req.metadata or {}
-            audit.log_search(
-                sender_open_id=sender_meta.get("sender_open_id", ""),
-                user_name=sender_meta.get("user_name", ""),
-                chat_id=sender_meta.get("chat_id", ""),
-                chat_type=sender_meta.get("chat_type", ""),
-                platform=sender_meta.get("platform", ""),
-                query=req.query,
-                result_count=len(results),
-            )
-    except Exception as e:
-        logger.debug("审计日志记录失败: %s", e)
-
     return {
         "results": results,
         "count": len(results),
@@ -450,19 +398,7 @@ async def delete_memory(req: DeleteRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Delete failed: {e}")
-
-    # 审计日志
-    try:
-        audit = get_audit_logger()
-        if audit:
-            audit.log_delete(
-                memory_id=req.memory_id,
-                confirm=False,
-                result="soft_deleted",
-            )
-    except Exception as e:
-        logger.debug("审计日志记录失败: %s", e)
-
+    
     return {"status": "ok", "memory_id": req.memory_id, "action": "soft_deleted"}
 
 
@@ -615,63 +551,6 @@ async def get_stats():
         result["neo4j"]["_error"] = str(e)
 
     return result
-
-
-@app.get("/audit/logs")
-async def get_audit_logs(
-    operation: Optional[str] = None,
-    sender_open_id: Optional[str] = None,
-    chat_id: Optional[str] = None,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
-):
-    """查询审计日志。
-
-    支持按操作类型、用户、群聊、时间范围过滤。
-    """
-    audit = get_audit_logger()
-    if not audit:
-        raise HTTPException(status_code=500, detail="审计日志未初始化")
-
-    results = audit.query(
-        operation=operation,
-        sender_open_id=sender_open_id,
-        chat_id=chat_id,
-        start_time=start_time,
-        end_time=end_time,
-        limit=limit,
-        offset=offset,
-    )
-
-    return {
-        "results": results,
-        "count": len(results),
-        "limit": limit,
-        "offset": offset,
-    }
-
-
-@app.get("/audit/stats")
-async def get_audit_stats():
-    """获取审计日志统计信息。"""
-    audit = get_audit_logger()
-    if not audit:
-        raise HTTPException(status_code=500, detail="审计日志未初始化")
-
-    return audit.get_stats()
-
-
-@app.post("/audit/cleanup")
-async def cleanup_audit_logs():
-    """手动清理旧审计日志。"""
-    audit = get_audit_logger()
-    if not audit:
-        raise HTTPException(status_code=500, detail="审计日志未初始化")
-
-    audit.cleanup_old_logs()
-    return {"status": "ok", "message": "旧日志清理完成"}
 
 
 @app.post("/expire")
