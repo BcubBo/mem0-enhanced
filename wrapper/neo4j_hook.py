@@ -169,6 +169,8 @@ class Neo4jHook:
     def __init__(self):
         self._driver = None
         self._enabled = False
+        self._write_cache: Dict[str, float] = {}  # "name:type" -> timestamp
+        self._cache_ttl = 300  # 5分钟内同实体不重复写入
         self._load_config()
 
     def _load_config(self) -> None:
@@ -204,6 +206,7 @@ class Neo4jHook:
         """写入记忆后，提取实体+关系写入 Neo4j（带 source_memory_id）。
 
         PII 过滤：跳过含身份证/手机/邮箱的实体，脱敏真实姓名。
+        缓存去重：5分钟内同实体不重复写入。
         """
         if not self._enabled or not self._driver:
             return
@@ -231,6 +234,25 @@ class Neo4jHook:
 
         if not entities:
             return
+
+        # 缓存去重：跳过已缓存的实体
+        now = time.time()
+        uncached_entities = []
+        for entity in entities:
+            name = _sanitize_name(entity.get("name", ""))
+            etype = entity.get("type", "Entity")
+            cache_key = f"{name}:{etype}"
+            if cache_key in self._write_cache and now - self._write_cache[cache_key] < self._cache_ttl:
+                continue  # 跳过已缓存实体
+            self._write_cache[cache_key] = now
+            uncached_entities.append(entity)
+        
+        if not uncached_entities:
+            logger.debug("neo4j: all entities cached, skip write")
+            return
+        
+        entities = uncached_entities
+        logger.debug("neo4j: %d entities after cache filter", len(entities))
 
         # 写入实体（带 source_memory_id）
         with self._driver.session() as session:

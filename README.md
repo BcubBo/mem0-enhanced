@@ -5,9 +5,12 @@
 ## 特性
 
 - **双端同步**：Qdrant 向量存储 + Neo4j 知识图谱
-- **智能搜索**：5维打分 + Rerank 重排序
+- **智能搜索**：6维打分（向量+BM25+时间+可靠性+热度+置信度） + Rerank 重排序
 - **核心记忆**：区分长期稳定记忆和普通记忆
 - **自动维护**：过期清理、记忆整合、自进化、反思分析
+- **版本追踪**：每次更新自动保存历史版本，支持回溯
+- **热知识归档**：高频访问的记忆自动升级为核心记忆
+- **图谱可视化**：导出 Neo4j 知识图谱数据（节点+边）
 - **安全防护**：注入防御、PII脱敏、矛盾消解
 - **Hermes 集成**：提供 MemoryProvider 插件
 
@@ -24,10 +27,13 @@ mem0x/
 │   ├── evolve_mem.py      # 自进化
 │   ├── reflect.py         # 反思引擎
 │   ├── neo4j_hook.py      # Neo4j 集成
-│   └── salience.py        # 显著性引擎
+│   ├── salience.py        # 显著性引擎
+│   ├── graph_export.py    # 图谱导出
+│   ├── hot_archive.py     # 热知识归档
+│   └── version_tracker.py # 版本追踪
 ├── security/              # 安全模块
 │   ├── pipeline.py        # 安全写入管道
-│   ├── scoring.py         # 5维打分
+│   ├── scoring.py         # 6维打分
 │   ├── conflict_resolver.py
 │   ├── dedup.py
 │   ├── injection_guard.py
@@ -68,7 +74,7 @@ python api_server.py
 
 ```bash
 # 构建
-docker build -t mem0x:0.1.0 .
+docker build -t mem0x:0.1.3 .
 
 # 运行
 docker run -d \
@@ -184,6 +190,22 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
 - `POST /core-memory/remove` - 移除核心标记
 - `GET /core-memory/list` - 列出核心记忆
 
+### 版本追踪
+- `GET /versions/{memory_id}` - 查询记忆版本历史
+- `GET /versions/stats` - 版本统计
+
+### 热知识归档
+- `GET /archive/candidates` - 查询归档候选
+- `POST /archive/run` - 手动触发归档
+- `GET /archive/status` - 归档线程状态
+
+### 图谱可视化
+- `GET /graph/export` - 导出知识图谱（节点+边）
+  - `limit` 最大节点数（默认 200）
+  - `depth` 子图展开层数（默认 2，上限 5）
+  - `entity_type` 按类型过滤（Person/Project/Service/...）
+  - `center` 中心节点（子图模式）
+
 ## 数据存储
 
 ```
@@ -193,7 +215,8 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
     ├── conflict.db      # 冲突记录
     ├── core_memory.db   # 核心记忆
     ├── reflect.db       # 反思日志
-    └── salience.db      # 热度追踪
+    ├── salience.db      # 热度追踪
+    └── version_history.db # 版本历史
 ```
 
 记忆内容存储在：

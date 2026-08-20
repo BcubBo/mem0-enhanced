@@ -25,7 +25,7 @@ PROJECT_ROOT = str(Path(__file__).resolve().parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 # ── 延迟导入（配置加载后才初始化） ──
@@ -37,6 +37,9 @@ from wrapper import consolidation
 from wrapper import core_memory
 from wrapper import evolve_mem
 from wrapper import reflect
+from wrapper import hot_archive
+from wrapper import graph_export
+from wrapper import version_tracker
 from security.pipeline import safe_add
 from security.scoring import score_and_rank
 from security.degradation import DegradationTracker
@@ -147,6 +150,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("reflect 启动失败: %s", e)
 
+    # 启动 hot_archive 后台线程
+    try:
+        hot_archive.start(get_memory)
+        logger.info("hot_archive 已启动")
+    except Exception as e:
+        logger.warning("hot_archive 启动失败: %s", e)
+
     yield
 
     # 关闭
@@ -154,6 +164,7 @@ async def lifespan(app: FastAPI):
     consolidation.stop()
     evolve_mem.stop()
     reflect.stop()
+    hot_archive.stop()
     try:
         hook = get_hook()
         hook.shutdown()
@@ -165,7 +176,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="mem0x",
     description="自托管 AI 记忆增强服务",
-    version="0.1.0",
+    version="0.1.3",
     lifespan=lifespan,
 )
 
@@ -190,22 +201,21 @@ async def health():
 
 
 @app.post("/add")
-async def add_memory(req: AddRequest):
+async def add_memory(req: AddRequest, request: Request):
     """安全写入记忆。
 
     链路：注入防御 → PII脱敏 → 去重 → 矛盾消解 → 语义判重 → 写入
+    user_id 优先级：请求头 X-User-ID > 请求体 user_id > 默认 "bo"
     """
     memory = get_memory()
     start = time.time()
 
+    # 从请求头或请求体获取 user_id/agent_id
+    user_id = request.headers.get("X-User-ID") or req.user_id or "bo"
+    agent_id = request.headers.get("X-Agent-ID") or req.agent_id or "hermes"
+
     # 构建 filters（mem0 2.0+ 必须有 user_id/agent_id/run_id 之一）
-    filters = {}
-    if req.user_id:
-        filters["user_id"] = req.user_id
-    if req.agent_id:
-        filters["agent_id"] = req.agent_id
-    if not filters:
-        filters["user_id"] = "bo"  # 默认用户
+    filters = {"user_id": user_id, "agent_id": agent_id}
 
     # 提取文本
     if isinstance(req.messages, str):
@@ -220,18 +230,24 @@ async def add_memory(req: AddRequest):
     # 安全写入链路
     result = safe_add(
         memory, content, filters,
-        user_id=req.user_id, agent_id=req.agent_id,
+        user_id=user_id, agent_id=agent_id,
         metadata=req.metadata, expiration_date=req.expiration_date,
         infer=req.infer,
     )
 
-    # 写入后：注册 salience + Neo4j
+    # 写入后：注册 salience + Neo4j + 版本追踪
     memory_id = result.get("memory_id")
     if memory_id and result.get("action") in ("added", "conflict"):
         try:
             salience_register(memory_id, content_preview=content[:200])
         except Exception as e:
             logger.debug("salience register 失败: %s", e)
+
+        # 版本追踪：保存初始版本
+        try:
+            version_tracker.save_version(memory_id, content, reason="create")
+        except Exception as e:
+            logger.debug("version_tracker init 失败: %s", e)
 
         try:
             hook = get_hook()
@@ -246,25 +262,24 @@ async def add_memory(req: AddRequest):
 
 
 @app.post("/search")
-async def search_memory(req: SearchRequest):
+async def search_memory(req: SearchRequest, request: Request):
     """搜索记忆。
 
-    链路：向量检索 → 5维打分 → rerank → salience boost → Neo4j 关联
+    链路：向量检索 → Neo4j引导查询 → 5维打分 → rerank → salience boost
+    user_id 优先级：请求头 X-User-ID > 请求体 user_id > 默认 "bo"
     """
     memory = get_memory()
     start = time.time()
 
-    # 构建 filters（mem0 2.0+ 必须有 user_id/agent_id/run_id 之一）
-    filters = {}
-    if req.user_id:
-        filters["user_id"] = req.user_id
-    if req.agent_id:
-        filters["agent_id"] = req.agent_id
-    if not filters:
-        filters["user_id"] = "bo"  # 默认用户
+    # 从请求头或请求体获取 user_id/agent_id
+    user_id = request.headers.get("X-User-ID") or req.user_id or "bo"
+    agent_id = request.headers.get("X-Agent-ID") or req.agent_id or "hermes"
 
-    # 向量检索（扩大候选池）
-    search_limit = req.limit * 3
+    # 构建 filters（mem0 2.0+ 必须有 user_id/agent_id/run_id 之一）
+    filters = {"user_id": user_id, "agent_id": agent_id}
+
+    # 向量检索（缩小候选池，用 top 结果引导 Neo4j）
+    search_limit = 20
     try:
         raw = memory.search(req.query, filters=filters, top_k=search_limit)
         results = raw.get("results", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
@@ -281,6 +296,26 @@ async def search_memory(req: SearchRequest):
     # 时间窗口过滤
     if req.before or req.after:
         results = _filter_by_time(results, req.before, req.after)
+
+    # Neo4j 引导查询：用 top-3 结果文本提取实体，引导图谱查询
+    neo4j_results = []
+    try:
+        hook = get_hook()
+        if hook.enabled:
+            top_texts = [r.get("memory", "") for r in results[:3]]
+            neo4j_results = hook.query(req.query, extra_texts=top_texts)
+    except Exception as e:
+        logger.debug("neo4j query 失败: %s", e)
+        DegradationTracker.record_degradation("neo4j", str(e))
+
+    # 合并 Neo4j 结果到主结果（去重）
+    if neo4j_results:
+        existing_ids = {r.get("id") for r in results}
+        for nr in neo4j_results:
+            nr_id = nr.get("id", f"neo4j:{nr.get('name', '')}")
+            if nr_id not in existing_ids:
+                results.append(nr)
+                existing_ids.add(nr_id)
 
     # 5维打分
     try:
@@ -318,15 +353,6 @@ async def search_memory(req: SearchRequest):
         results = boost_salience_for_results(results)
     except Exception as e:
         logger.debug("salience boost 失败: %s", e)
-
-    # Neo4j 关联查询
-    neo4j_results = []
-    try:
-        hook = get_hook()
-        if hook.enabled:
-            extra_texts = [r.get("memory", "") for r in results[:5]]
-            neo4j_results = hook.query(req.query, extra_texts=extra_texts)
-    except Exception as e:
         logger.debug("neo4j query 失败: %s", e)
         DegradationTracker.record_degradation("neo4j_query", str(e))
 
@@ -436,6 +462,18 @@ async def update_memory(req: UpdateRequest):
     cleaned_content = redact_pii(cleaned_content)
 
     try:
+        # 0. 版本追踪：更新前保存旧版本
+        try:
+            old_item = memory.get(req.memory_id)
+            if old_item:
+                old_content = old_item.get("memory", "")
+                old_meta = old_item.get("metadata") or {}
+                version_tracker.save_version(
+                    req.memory_id, old_content, old_meta, reason="update",
+                )
+        except Exception as e:
+            logger.debug("version_tracker save 失败: %s", e)
+
         # 1. 更新 Qdrant
         memory.update(req.memory_id, cleaned_content, metadata=req.metadata)
 
@@ -700,6 +738,75 @@ async def reflect_logs(limit: int = 10):
     """列出最近的反思日志。"""
     return {
         "logs": reflect.list_reflect_logs(limit),
+    }
+
+
+# ── Version Tracker 端点 ──
+
+@app.get("/versions/stats")
+async def version_stats():
+    """查询版本追踪统计。"""
+    return {
+        "total_versions": version_tracker.get_total_versions(),
+    }
+
+
+@app.get("/versions/{memory_id}")
+async def get_versions(memory_id: str, limit: int = 20):
+    """查询记忆的版本历史（最新在前）。"""
+    versions = version_tracker.get_versions(memory_id, limit)
+    count = version_tracker.get_version_count(memory_id)
+    return {
+        "memory_id": memory_id,
+        "versions": versions,
+        "total": count,
+    }
+
+
+# ── Graph Export 端点 ──
+
+@app.get("/graph/export")
+async def export_graph(
+    limit: int = 200,
+    depth: int = 2,
+    entity_type: Optional[str] = None,
+    center: Optional[str] = None,
+):
+    """导出知识图谱数据（节点+边）。
+
+    用于 Hermes 搜索增强或前端可视化。
+    - 全局导出：不传 center，按连接数排序取 top-N
+    - 子图导出：传 center，从中心节点展开 depth 层
+    """
+    return graph_export.export_graph(
+        limit=limit, depth=depth, entity_type=entity_type, center=center,
+    )
+
+
+# ── Hot Archive 端点 ──
+
+@app.get("/archive/candidates")
+async def archive_candidates():
+    """查询热知识候选（满足阈值但尚未归档的记忆）。"""
+    candidates = hot_archive.find_hot_candidates()
+    return {
+        "candidates": candidates,
+        "count": len(candidates),
+    }
+
+
+@app.post("/archive/run")
+async def archive_run():
+    """手动触发热知识归档。"""
+    result = hot_archive.run_archive_cycle()
+    return result
+
+
+@app.get("/archive/status")
+async def archive_status():
+    """查询 hot_archive 后台线程状态。"""
+    return {
+        "running": hot_archive.is_running(),
     }
 
 

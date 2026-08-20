@@ -29,11 +29,12 @@ IGNITION_THRESHOLD = 0.85
 IGNITION_MAX = 8
 
 DEFAULT_WEIGHTS = {
-    "vector": 0.35,
-    "bm25": 0.25,
-    "time": 0.15,
+    "vector": 0.30,
+    "bm25": 0.20,
+    "time": 0.12,
     "reliability": 0.10,
-    "heat": 0.15,
+    "heat": 0.13,
+    "confidence": 0.15,
 }
 
 
@@ -100,21 +101,51 @@ def _compute_time_decay(created_ts: float, now_ts: Optional[float] = None) -> fl
     return round(math.exp(-RECENCY_LAMBDA * age_days), 4)
 
 
+def _compute_confidence(created_ts: float, access_count: float = 0,
+                        now_ts: Optional[float] = None) -> float:
+    """置信度衰减：越老越低，访问越多越高。
+
+    公式：base_decay * access_boost
+    - base_decay: 指数衰减，半衰期 ~90 天（比 time 衰减慢）
+    - access_boost: log(1 + access_count) / 5.0，上限 1.0
+    """
+    if created_ts <= 0:
+        return 0.5
+    now = now_ts or time.time()
+    age_days = max(0.0, (now - created_ts) / 86400.0)
+    base_decay = math.exp(-0.008 * age_days)  # 半衰期 ~87 天
+    access_boost = min(1.0, math.log1p(access_count) / 5.0)
+    return round(base_decay * (0.5 + 0.5 * access_boost), 4)
+
+
 def score_and_rank(
     query: str,
     candidates: List[dict],
     *,
     weights: Optional[Dict[str, float]] = None,
     limit: int = 10,
+    config: Optional[Dict[str, Any]] = None,
 ) -> List[dict]:
     """五维打分 + Ignition + 去重。
 
     返回排好序的结果列表，每条加 _hybrid_score 和 _time_decay 字段。
+    权重优先级：weights 参数 > config.json scoring.weights > DEFAULT_WEIGHTS
     """
     if not candidates:
         return []
 
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    # 从 config 读取权重配置
+    cfg_weights = (config or {}).get("scoring", {}).get("weights", {})
+    w = {**DEFAULT_WEIGHTS, **cfg_weights, **(weights or {})}
+
+    # 从 config 读取 recency_lambda
+    global RECENCY_LAMBDA
+    cfg_lambda = (config or {}).get("scoring", {}).get("recency_lambda")
+    if cfg_lambda is not None:
+        try:
+            RECENCY_LAMBDA = float(cfg_lambda)
+        except (ValueError, TypeError):
+            pass
     now_ts = time.time()
     is_fact_query = bool(_FACT_KEYWORDS.search(query))
 
@@ -151,6 +182,9 @@ def score_and_rank(
         access_count = float(raw_count if raw_count is not None else 1)
         heat_s = min(access_count / 100.0, 1.0)
 
+        # 置信度衰减分
+        confidence_s = _compute_confidence(created_ts, access_count, now_ts)
+
         # 综合得分
         base_score = (
             w["vector"] * vec_s
@@ -158,6 +192,7 @@ def score_and_rank(
             + w["time"] * time_s
             + w["reliability"] * reliability_s
             + w["heat"] * heat_s
+            + w["confidence"] * confidence_s
         )
 
         # 事实类查询增益（cap 1.0）

@@ -47,11 +47,12 @@
   },
   "scoring": {
     "weights": {
-      "vector": 0.35,
-      "bm25": 0.25,
-      "time": 0.15,
+      "vector": 0.3,
+      "bm25": 0.2,
+      "time": 0.12,
       "reliability": 0.1,
-      "heat": 0.15
+      "heat": 0.13,
+      "confidence": 0.15
     },
     "recency_lambda": 0.05,
     "rerank_weight": 0.4
@@ -65,5 +66,11 @@
     "merge_threshold": 0.85,
     "update_threshold": 0.7
   },
-  "data_dir": "data"
+  "data_dir": "data",
+  "hot_archive": {
+    "interval": 21600,
+    "salience_threshold": 0.8,
+    "access_threshold": 5,
+    "category": "hot_archive"
+  }
 }

@@ -5,14 +5,14 @@
 
 services:
   mem0x:
-    image: mem0x:0.1.0
+    image: mem0x:0.1.3
     container_name: mem0x
     restart: unless-stopped
     ports:
       - "28768:28768"
     volumes:
-      - ${MEM0X_DATA_DIR:-~/.mem0x/data}:/app/data
-      - ${MEM0X_CONFIG:-~/.mem0x/config-compose.json}:/app/config.json:ro
+      - /home/ubuntu/.mem0x/data:/app/data
+      - /home/ubuntu/.mem0x/config-compose.json:/app/config.json:ro
     environment:
       MEM0X_CONFIG: /app/config.json
     networks:
