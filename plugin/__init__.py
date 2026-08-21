@@ -101,6 +101,8 @@ def _get_sender_metadata() -> dict:
             "chat_id": ctx.get("chat_id", ""),
             "chat_type": ctx.get("chat_type", ""),
             "platform": ctx.get("platform", ""),
+            "message_id": ctx.get("message_id", ""),
+            "event_message_id": ctx.get("event_message_id", ""),
         }
     except Exception as e:
         logger.debug("mem0x: _get_sender_metadata failed: %s", e)
