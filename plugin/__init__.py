@@ -87,6 +87,26 @@ def _get_agent_id() -> str:
     return _load_config().get("agent_id", "hermes")
 
 
+def _get_sender_metadata() -> dict:
+    """从 lark-hls-v2 的 _msg_ctx 读取 sender 信息（飞书消息溯源）。"""
+    try:
+        from hermes_plugins.lark_hls_v2.interceptors import _msg_ctx
+        ctx = _msg_ctx.get()
+        logger.debug("mem0x: _get_sender_metadata ctx=%s", ctx)
+        if not ctx:
+            return {}
+        return {
+            "sender_open_id": ctx.get("user_id", ""),
+            "user_name": ctx.get("user_name", ""),
+            "chat_id": ctx.get("chat_id", ""),
+            "chat_type": ctx.get("chat_type", ""),
+            "platform": ctx.get("platform", ""),
+        }
+    except Exception as e:
+        logger.debug("mem0x: _get_sender_metadata failed: %s", e)
+        return {}
+
+
 # ═══════════════════════════════════════════════════
 # MemoryProvider 接口实现
 # ═══════════════════════════════════════════════════
@@ -139,15 +159,21 @@ class Mem0RemoteProvider:
 
     def sync_turn(self, user_msg: str, assistant_msg: str, session_id: str = "", **kwargs) -> None:
         """对话后异步写入记忆。"""
+        metadata = _get_sender_metadata()
+        logger.debug("mem0x: sync_turn metadata=%s", metadata)
+
         def _write():
             client = _get_client()
             content = f"User: {user_msg}\nAssistant: {assistant_msg}"
-            client.try_request("POST", "/add", body={
+            body = {
                 "messages": content,
                 "user_id": _get_user_id(),
                 "agent_id": _get_agent_id(),
                 "infer": True,
-            }, timeout=20.0)
+            }
+            if metadata:
+                body["metadata"] = metadata
+            client.try_request("POST", "/add", body=body, timeout=20.0)
 
         threading.Thread(target=_write, daemon=True).start()
 
@@ -218,12 +244,16 @@ class Mem0RemoteProvider:
         
         if tool_name == "mem0_add":
             content = args.get("content", "")
-            result = client.try_request("POST", "/add", body={
+            metadata = _get_sender_metadata()
+            body = {
                 "messages": content,
                 "user_id": _get_user_id(),
                 "agent_id": _get_agent_id(),
                 "infer": False,
-            }, timeout=20.0)
+            }
+            if metadata:
+                body["metadata"] = metadata
+            result = client.try_request("POST", "/add", body=body, timeout=20.0)
 
         elif tool_name == "mem0_search":
             query = args.get("query", "")
