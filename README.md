@@ -5,20 +5,26 @@
 ## 特性
 
 - **双端同步**：Qdrant 向量存储 + Neo4j 知识图谱
-- **智能搜索**：6维打分（向量+BM25+时间+可靠性+热度+置信度） + Rerank 重排序
+- **智能搜索**：6维打分（向量+BM25+时间+可靠性+热度+置信度） + Rerank 重排序 + Salience Boost
+- **图谱联想召回**：搜索时自动提取实体 → Neo4j 2跳关联查询 → 补充召回
+- **矛盾消解**：实体对齐 + 规则收窄，旧记忆自动归档（可回滚）
+- **记忆溯源**：写入时携带 sender metadata（sender_open_id, chat_type, chat_id, message_id）
 - **核心记忆**：区分长期稳定记忆和普通记忆
 - **自动维护**：过期清理、记忆整合、自进化、反思分析
 - **版本追踪**：每次更新自动保存历史版本，支持回溯
 - **热知识归档**：高频访问的记忆自动升级为核心记忆
-- **图谱可视化**：导出 Neo4j 知识图谱数据（节点+边）
-- **安全防护**：注入防御、PII脱敏、矛盾消解
-- **Hermes 集成**：提供 MemoryProvider 插件
+- **安全防护**：注入防御（L1-L4）、PII脱敏、Jaccard去重
+- **Hermes 集成**：提供 MemoryProvider 插件（prefetch + sync_turn + tool_call）
 
 ## 目录结构
 
 ```
 mem0x/
 ├── mem0x_server.py        # FastAPI 服务入口
+├── mem0x/                 # Hermes 插件
+│   ├── __init__.py        # MemoryProvider 实现
+│   ├── plugin.yaml        # 插件元数据
+│   └── mem0x.json.example # 配置示例
 ├── wrapper/               # 核心模块
 │   ├── mem0_runtime.py    # mem0 运行时
 │   ├── auto_expire.py     # 自动过期
@@ -26,7 +32,7 @@ mem0x/
 │   ├── core_memory.py     # 核心记忆
 │   ├── evolve_mem.py      # 自进化
 │   ├── reflect.py         # 反思引擎
-│   ├── neo4j_hook.py      # Neo4j 集成
+│   ├── neo4j_hook.py      # Neo4j 集成（2跳图谱联想）
 │   ├── salience.py        # 显著性引擎
 │   ├── graph_export.py    # 图谱导出
 │   ├── hot_archive.py     # 热知识归档
@@ -34,126 +40,81 @@ mem0x/
 ├── security/              # 安全模块
 │   ├── pipeline.py        # 安全写入管道
 │   ├── scoring.py         # 6维打分
-│   ├── conflict_resolver.py
-│   ├── dedup.py
-│   ├── injection_guard.py
-│   └── self_edit.py
-├── plugin/                # Hermes 插件
-│   ├── __init__.py
-│   ├── plugin.yaml
-│   └── mem0x.json.example
+│   ├── conflict_resolver.py # 矛盾消解（实体对齐+规则收窄）
+│   ├── dedup.py           # Jaccard 去重
+│   ├── injection_guard.py # 注入防御
+│   └── self_edit.py       # LLM 语义判重
 ├── Dockerfile
+├── docker-compose.mem0x.yml
 ├── requirements.txt
 └── config.json.example
 ```
 
 ## 快速开始
 
-### 1. 本地运行
+### 1. Docker 部署（推荐）
 
 ```bash
 # 克隆
 git clone https://github.com/BcubBo/mem0x.git
 cd mem0x
 
-# 创建虚拟环境
+# 准备配置
+mkdir -p ~/.mem0x/data
+cp config-compose.json.example ~/.mem0x/config-compose.json
+# 编辑 ~/.mem0x/config-compose.json 填入你的 API key
+
+# 构建并启动
+docker build -t mem0xapi:0.1.3 .
+docker compose -f docker-compose.mem0x.yml up -d
+
+# 验证
+curl http://localhost:28768/health
+```
+
+### 2. 本地运行
+
+```bash
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 配置
-mkdir -p ~/.mem0x
-cp config.json.example ~/.mem0x/config.json
-# 编辑 ~/.mem0x/config.json 填入你的 API key
+cp config.json.example config.json
+# 编辑 config.json 填入你的 API key
 
-# 运行
 python mem0x_server.py
-```
-
-### 2. Docker 运行
-
-```bash
-# 构建
-docker build -t mem0x:0.1.3 .
-
-# 运行
-docker run -d \
-  --name mem0x \
-  -v ~/.mem0x/config.json:/app/config.json \
-  -v ~/.mem0x/data:/app/data \
-  -p 8080:8080 \
-  mem0x:0.1.0
-```
-
-### 3. Hermes 插件安装
-
-```bash
-# 复制插件到 Hermes
-cp -r plugin/ ~/.hermes/profiles/your-profile/plugins/mem0x/
-
-# 复制配置
-cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
-# 编辑 mem0x.json 设置 service_url
-
-# 在 config.yaml 中启用
-# memory.provider: mem0x
 ```
 
 ## 配置
 
-### 服务配置 (config.json)
+### 配置文件优先级
 
-配置文件位置（按优先级）：
 1. 环境变量 `MEM0X_CONFIG`
-2. `~/.mem0x/config.json`
-3. 项目目录 `config.json`
+2. `~/.mem0x/config.json`（本地运行）
+3. `~/.mem0x/config-compose.json`（Docker 运行，挂载到容器内 `/app/config.json`）
+4. 项目目录 `config.json`
+
+### Docker 网络配置
+
+Docker 部署时，服务地址必须使用 Docker 网络名称：
 
 ```json
 {
   "mem0": {
-    "llm": {
-      "provider": "openai",
-      "config": {
-        "model": "Qwen/Qwen2.5-14B-Instruct",
-        "api_key": "sk-your-llm-api-key",
-        "openai_base_url": "https://api.siliconflow.cn/v1"
-      }
-    },
-    "embedder": {
-      "provider": "openai",
-      "config": {
-        "model": "BAAI/bge-m3",
-        "api_key": "sk-your-embedder-api-key",
-        "openai_base_url": "https://api.siliconflow.cn/v1"
-      }
-    },
     "vector_store": {
-      "provider": "qdrant",
       "config": {
-        "url": "http://your-qdrant-host:6333",
-        "api_key": "your-qdrant-api-key",
-        "embedding_model_dims": 1024,
-        "collection_name": "mem0"
+        "url": "http://qdrant:6333"  // ✅ Docker DNS
+        // "url": "http://127.0.0.1:26333"  // ❌ 容器内不通
       }
-    }
-  },
-  "rerank": {
-    "provider": "siliconflow",
-    "config": {
-      "model": "BAAI/bge-reranker-v2-m3",
-      "api_key": "sk-your-rerank-api-key",
-      "openai_base_url": "https://api.siliconflow.cn/v1"
     }
   },
   "neo4j": {
-    "enabled": true,
-    "uri": "bolt://your-neo4j-host:7687",
-    "username": "neo4j",
-    "password": "your-neo4j-password"
+    "uri": "bolt://neo4j:7687"  // ✅ Docker DNS
+    // "uri": "bolt://localhost:26787"  // ❌ 容器内不通
   },
   "server": {
-    "host": "0.0.0.0",
-    "port": 8080
+    "host": "0.0.0.0",  // ✅ Docker 需要绑定所有接口
+    // "host": "127.0.0.1"  // ❌ Docker 端口映射不通
   }
 }
 ```
@@ -162,78 +123,127 @@ cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
 
 | 变量 | 说明 |
 |------|------|
-| `MEM0X_HOME` | 配置和数据根目录（默认 `~/.mem0x`） |
 | `MEM0X_CONFIG` | 配置文件路径 |
-| `MEM0X_DATA_DIR` | 数据目录路径 |
+| `MEM0X_HOME` | 配置和数据根目录（默认 `~/.mem0x`） |
 
 ## API 端点
 
 ### 核心
-- `POST /add` - 写入记忆
-- `POST /search` - 搜索记忆
-- `POST /delete` - 删除记忆
-- `POST /update` - 更新记忆
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| POST | `/add` | 写入记忆（含注入防御+去重+矛盾消解） |
+| POST | `/search` | 搜索记忆（向量+Neo4j联想+salience boost+rerank） |
+| POST | `/delete` | 删除记忆（软删除） |
+| POST | `/update` | 更新记忆（双端同步） |
 
 ### 监控
-- `GET /health` - 健康检查
-- `GET /stats` - 数据统计
-- `GET /degradation` - 降级状态
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查（mem0+neo4j状态） |
+| GET | `/stats` | 数据统计 |
+| GET | `/degradation` | 降级状态 |
 
 ### 维护
-- `POST /expire` - 过期清理
-- `POST /consolidate` - 记忆整合
-- `POST /evolve` - 自进化
-- `POST /reflect` - 系统反思
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| POST | `/expire` | 过期清理 |
+| POST | `/consolidate` | 记忆整合（碎片合并） |
+| POST | `/evolve` | 自进化 |
+| POST | `/reflect` | 系统反思 |
 
 ### 核心记忆
-- `POST /core-memory/add` - 标记为核心记忆
-- `POST /core-memory/remove` - 移除核心标记
-- `GET /core-memory/list` - 列出核心记忆
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| POST | `/core-memory/add` | 标记为核心记忆 |
+| POST | `/core-memory/remove` | 移除核心标记 |
+| GET | `/core-memory/list` | 列出核心记忆 |
 
 ### 版本追踪
-- `GET /versions/{memory_id}` - 查询记忆版本历史
-- `GET /versions/stats` - 版本统计
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/versions/{memory_id}` | 查询记忆版本历史 |
+| GET | `/versions/stats` | 版本统计 |
 
 ### 热知识归档
-- `GET /archive/candidates` - 查询归档候选
-- `POST /archive/run` - 手动触发归档
-- `GET /archive/status` - 归档线程状态
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/archive/candidates` | 查询归档候选 |
+| POST | `/archive/run` | 手动触发归档 |
+| GET | `/archive/status` | 归档线程状态 |
 
 ### 图谱可视化
-- `GET /graph/export` - 导出知识图谱（节点+边）
-  - `limit` 最大节点数（默认 200）
-  - `depth` 子图展开层数（默认 2，上限 5）
-  - `entity_type` 按类型过滤（Person/Project/Service/...）
-  - `center` 中心节点（子图模式）
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/graph/export` | 导出知识图谱（节点+边） |
+
+## Hermes 插件部署
+
+### 安装
+
+```bash
+# 复制插件到 Hermes profile
+cp -r mem0x/ ~/.hermes/profiles/your-profile/plugins/mem0x/
+
+# 复制配置
+cp mem0x/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
+# 编辑 mem0x.json 设置 service_url（指向 mem0x API 服务地址）
+```
+
+### 配置 (mem0x.json)
+
+```json
+{
+  "service_url": "http://127.0.0.1:28768",
+  "user_id": "your-user-id",
+  "agent_id": "hermes"
+}
+```
+
+### 启用
+
+在 `config.yaml` 中设置：
+
+```yaml
+memory:
+  memory_enabled: true
+  provider: mem0x
+```
+
+### 插件功能
+
+| 功能 | 说明 |
+|------|------|
+| `prefetch()` | 对话前预取记忆，注入 system prompt（含 Neo4j 图谱联想） |
+| `sync_turn()` | 对话后异步写入记忆（含 sender metadata 溯源） |
+| `handle_tool_call()` | 工具调用时的 add/search/update/delete |
 
 ## 数据存储
 
 ```
 ~/.mem0x/
-├── config.json          # 配置文件
-└── data/                # SQLite 数据
-    ├── conflict.db      # 冲突记录
-    ├── core_memory.db   # 核心记忆
-    ├── reflect.db       # 反思日志
-    ├── salience.db      # 热度追踪
+├── config-compose.json   # Docker 配置
+├── config.json           # 本地配置
+└── data/                 # SQLite 数据
+    ├── conflict.db       # 矛盾消解记录
+    ├── core_memory.db    # 核心记忆元数据
+    ├── reflect.db        # 反思日志
+    ├── salience.db       # 热度/显著性追踪
     └── version_history.db # 版本历史
 ```
 
-记忆内容存储在：
-- **Qdrant**：向量索引
-- **Neo4j**：实体关系图谱
+向量和图谱存储：
+- **Qdrant**：向量索引（端口 26333）
+- **Neo4j**：实体关系图谱（bolt 26787 / HTTP 27474）
 
 ## 开发
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 测试环境（端口 28767）
+python mem0x_server.py  # config.json 中 port 设为 28767
 
-# 运行测试
-python -m pytest tests/
-
-# 代码检查
-python -m ruff check .
+# 测试环境验证
+curl http://localhost:28767/health
+curl -X POST http://localhost:28767/search -d '{"query":"test","limit":1}'
 ```
 
 ## 许可证
