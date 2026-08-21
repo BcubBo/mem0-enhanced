@@ -31,10 +31,34 @@ MUTUAL_EXCLUSION_PATTERNS: list[tuple[str, str, str]] = [
 ]
 
 _CHANGE_KEYWORDS = re.compile(
-    r"(改为|改成|变成|改为是|从.{0,200}?改为|从.{0,200}?改成|不再|已经不|现在是|改为用|换成了|替换成|"
+    r"(从.{2,30}?改为|从.{2,30}?改成|从.{2,30}?变[为成]|"
+    r"端口.{0,5}?改|路径.{0,5}?改|版本.{0,5}?改|状态.{0,5}?改|"
+    r"不再|已经不|现在是|改为用|换成了|替换成|"
     r"change(?:d)?\s+to|switch(?:ed)?\s+to|replace(?:d)?\s+with)",
     re.IGNORECASE,
 )
+
+
+def _extract_entity(text: str) -> str:
+    """从变更语句中提取变更主体。"""
+    m = re.search(r"(端口|路径|目录|版本|版本号|status|mode|状态|配置|地址|URL|端点)\s*(?:从|由|改成|改为|变为)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+    m = re.search(r"(端口|路径|目录|版本|状态|配置|地址|URL|端点)\s*[:：]?\s*\S+", text, re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+    return ""
+
+
+def _entity_matches(old_text: str, new_text: str) -> bool:
+    """检查新旧记忆是否关于同一实体。"""
+    old_entity = _extract_entity(old_text)
+    new_entity = _extract_entity(new_text)
+    if not old_entity and not new_entity:
+        return True
+    if old_entity and new_entity:
+        return old_entity == new_entity
+    return False
 
 # ── SQLite 账本（从 config 读路径） ──
 def _get_db_path() -> str:
@@ -133,7 +157,7 @@ def _text_matches_old_pattern(text: str, old_re: str) -> bool:
 
 def detect_and_resolve(memory, new_text: str, filters: dict = None) -> Optional[dict]:
     """写入前矛盾检测入口。返回 None → 无矛盾。"""
-    if not new_text or len(new_text) < 10:
+    if not new_text or len(new_text) < 15:
         return None
 
     triggered = _find_conflicting_patterns(new_text)
@@ -164,11 +188,31 @@ def detect_and_resolve(memory, new_text: str, filters: dict = None) -> Optional[
         if not mid or not old_text:
             continue
         meta = r.get("metadata") or {}
-        if meta.get("archived"):
+
+        # 跳过已归档和已删除的记忆
+        if meta.get("archived") or meta.get("deleted_at"):
+            continue
+
+        # 只考虑 P0/P1 优先级的记忆
+        if not re.search(r"\[P[01]\]", old_text[:50]):
+            continue
+
+        # 实体对齐：新旧记忆必须关于同一实体
+        if not _entity_matches(old_text, new_text):
             continue
 
         for attr_re, old_re, new_re in triggered:
-            if _text_matches_old_pattern(old_text[:10000], attr_re) and _text_matches_old_pattern(old_text[:10000], old_re):
+            old_attr_match = re.search(attr_re, old_text[:500], re.IGNORECASE)
+            new_attr_match = re.search(attr_re, new_text[:500], re.IGNORECASE)
+            if not old_attr_match or not new_attr_match:
+                continue
+            if old_attr_match.group(0).lower() != new_attr_match.group(0).lower():
+                continue
+            if _text_matches_old_pattern(old_text[:500], old_re) and _text_matches_old_pattern(new_text[:500], new_re):
+                old_val = re.search(old_re, old_text[:500], re.IGNORECASE)
+                new_val = re.search(new_re, new_text[:500], re.IGNORECASE)
+                if old_val and new_val and old_val.group(0) == new_val.group(0):
+                    continue
                 old_meta = dict(meta)
                 old_meta["archived"] = True
                 old_meta["archived_by"] = "conflict_resolver"

@@ -293,16 +293,22 @@ async def search_memory(req: SearchRequest, request: Request):
         if not (isinstance(r.get("metadata"), dict) and r["metadata"].get("deleted_at"))
     ]
 
+    # 过滤已归档的记忆（矛盾消解标记 archived=true 的旧记忆不返回）
+    results = [
+        r for r in results
+        if not (isinstance(r.get("metadata"), dict) and r["metadata"].get("archived"))
+    ]
+
     # 时间窗口过滤
     if req.before or req.after:
         results = _filter_by_time(results, req.before, req.after)
 
-    # Neo4j 引导查询：用 top-3 结果文本提取实体，引导图谱查询
+    # Neo4j 引导查询：用 query + top-3 结果文本提取实体，引导图谱查询
     neo4j_results = []
     try:
         hook = get_hook()
         if hook.enabled:
-            top_texts = [r.get("memory", "") for r in results[:3]]
+            top_texts = [req.query] + [r.get("memory", "") for r in results[:3]]
             neo4j_results = hook.query(req.query, extra_texts=top_texts)
     except Exception as e:
         logger.debug("neo4j query 失败: %s", e)
@@ -325,6 +331,12 @@ async def search_memory(req: SearchRequest, request: Request):
     except Exception as e:
         logger.debug("scoring 失败: %s", e)
 
+    # salience boost（排序前：让高频记忆排更前）
+    try:
+        results = boost_salience_for_results(results)
+    except Exception as e:
+        logger.debug("salience boost 失败: %s", e)
+
     # rerank
     if req.rerank and results:
         try:
@@ -340,21 +352,27 @@ async def search_memory(req: SearchRequest, request: Request):
                     if 0 <= idx < len(results):
                         base = results[idx].get("score", 0) or 0
                         rerank_s = rr.get("relevance_score", 0)
-                        results[idx]["score"] = base * (1 - rerank_weight) + rerank_s * rerank_weight
+                        heat = results[idx].get("heat", 0.5)
+                        salience_weight = config.get("scoring", {}).get("salience_weight", 0.15)
+                        results[idx]["score"] = (
+                            base * (1 - rerank_weight)
+                            + rerank_s * rerank_weight
+                            + heat * salience_weight
+                        )
                         results[idx]["rerank_score"] = rerank_s
-                results.sort(key=lambda x: x.get("score", 0), reverse=True)
-                results = results[:req.limit]
+            results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            results = results[:req.limit]
         except Exception as e:
             logger.debug("rerank 失败（降级）: %s", e)
             DegradationTracker.record_degradation("rerank", str(e))
+    else:
+        # 无 rerank 时仍按 score+heat 排序
+        for r in results:
+            heat = r.get("heat", 0.5)
+            r["score"] = r.get("score", 0) + heat * 0.15
+        results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        results = results[:req.limit]
 
-    # salience boost
-    try:
-        results = boost_salience_for_results(results)
-    except Exception as e:
-        logger.debug("salience boost 失败: %s", e)
-        logger.debug("neo4j query 失败: %s", e)
-        DegradationTracker.record_degradation("neo4j_query", str(e))
 
     if neo4j_results:
         for nr in neo4j_results:

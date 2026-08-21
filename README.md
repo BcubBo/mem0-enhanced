@@ -18,7 +18,7 @@
 
 ```
 mem0x/
-├── api_server.py          # FastAPI 服务入口
+├── mem0x_server.py        # FastAPI 服务入口
 ├── wrapper/               # 核心模块
 │   ├── mem0_runtime.py    # mem0 运行时
 │   ├── auto_expire.py     # 自动过期
@@ -67,7 +67,7 @@ cp config.json.example ~/.mem0x/config.json
 # 编辑 ~/.mem0x/config.json 填入你的 API key
 
 # 运行
-python api_server.py
+python mem0x_server.py
 ```
 
 ### 2. Docker 运行

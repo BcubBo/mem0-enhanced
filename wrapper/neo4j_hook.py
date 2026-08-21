@@ -123,21 +123,12 @@ def _redact_entity_name(name: str) -> str:
 
 
 def _extract_entities(text: str) -> Dict[str, List]:
-    """规则提取实体和关系。"""
+    """规则提取实体和关系。先提取关系（高质量实体），再用正则补充。"""
     entities = []
     relations = []
     seen = set()
 
-    for match in RE_EN_ENTITY.findall(text):
-        if match not in seen:
-            seen.add(match)
-            entities.append({"name": match, "type": _guess_type(match)})
-
-    for match in RE_ZH_ENTITY.findall(text):
-        if match not in ZH_STOP_WORDS and match not in seen:
-            seen.add(match)
-            entities.append({"name": match, "type": "Entity"})
-
+    # 先提取关系模式（高质量实体）
     relation_patterns = [
         (r'(.{2,8})(管理|负责|主导|创建了?)\s*(.{2,20})', 'MANAGES'),
         (r'(.{2,8})(使用|用|采用|基于)\s*(.{2,20})', 'USES'),
@@ -159,6 +150,19 @@ def _extract_entities(text: str) -> Dict[str, List]:
                     if name not in seen:
                         seen.add(name)
                         entities.append({"name": name, "type": _guess_type(name)})
+
+    # 再用正则提取独立实体（排除已从关系中提取的）
+    for match in RE_ZH_ENTITY.findall(text):
+        if match not in ZH_STOP_WORDS and match not in seen:
+            # 过滤：至少3个字，不在关系模式中出现过的实体
+            if len(match) >= 3:
+                seen.add(match)
+                entities.append({"name": match, "type": "Entity"})
+
+    for match in RE_EN_ENTITY.findall(text):
+        if match not in seen:
+            seen.add(match)
+            entities.append({"name": match, "type": _guess_type(match)})
 
     return {"entities": entities, "relations": relations}
 
@@ -342,10 +346,48 @@ class Neo4jHook:
         if not query_entities:
             return []
 
-        query_entities = query_entities[:MAX_QUERY_ENTITIES]
+        # 实体归一化：去掉后缀词，匹配 Neo4j 中已存在的实体名
+        normalized = []
+        SUFFIXES = ("从", "改为", "改成", "变为", "的", "是", "在", "有")
+        with self._driver.session() as session:
+            for entity_name in query_entities:
+                # 精确匹配
+                result = session.run(
+                    "MATCH (n) WHERE n.name = $name RETURN n.name LIMIT 1",
+                    name=entity_name,
+                )
+                if result.single():
+                    normalized.append(entity_name)
+                    continue
+                # 去后缀再匹配：端口从 -> 端口
+                stripped = entity_name
+                for suf in SUFFIXES:
+                    if stripped.endswith(suf) and len(stripped) > len(suf):
+                        stripped = stripped[:-len(suf)]
+                        break
+                if stripped != entity_name:
+                    result = session.run(
+                        "MATCH (n) WHERE n.name = $name RETURN n.name LIMIT 1",
+                        name=stripped,
+                    )
+                    if result.single():
+                        normalized.append(stripped)
+                        continue
+                # 前缀匹配
+                result = session.run(
+                    "MATCH (n) WHERE n.name STARTS WITH $prefix RETURN n.name LIMIT 3",
+                    prefix=entity_name[:2],
+                )
+                for record in result:
+                    n = record.get("n.name", record.get("name", ""))
+                    if n not in normalized:
+                        normalized.append(n)
+        query_entities = normalized[:MAX_QUERY_ENTITIES] if normalized else query_entities[:MAX_QUERY_ENTITIES]
 
         results = []
+        seen_names = set()
         with self._driver.session() as session:
+            # 1跳：直接关联
             for entity_name in query_entities:
                 try:
                     result = session.run(
@@ -358,6 +400,9 @@ class Neo4jHook:
                     )
                     for record in result:
                         name = record.get("original_name") or record["name"]
+                        if name in seen_names:
+                            continue
+                        seen_names.add(name)
                         labels = record["labels"]
                         relations = record["relations"]
                         rel_parts = []
@@ -370,8 +415,36 @@ class Neo4jHook:
                             "label": labels[0] if labels else "Unknown",
                             "relations": rel_str,
                         })
+                        # 收集1跳实体名，用于2跳查询
                 except Exception as e:
                     logger.debug("neo4j: query failed: %s", e)
+
+            # 2跳：关联的关联（取前5个1跳实体）
+            hop1_names = [r["name"] for r in results[:5] if r["name"] not in query_entities]
+            for entity_name in hop1_names[:5]:
+                try:
+                    result = session.run(
+                        "MATCH (n {name: toLower($name)}) "
+                        "OPTIONAL MATCH (n)-[r]-(related) "
+                        "RETURN related.name AS name, labels(related) AS labels, "
+                        "type(r) AS rel_type",
+                        name=entity_name,
+                    )
+                    for record in result:
+                        name = record.get("name")
+                        if not name or name in seen_names:
+                            continue
+                        seen_names.add(name)
+                        labels = record["labels"]
+                        rel_type = record["rel_type"]
+                        if rel_type in ALLOWED_REL_TYPES:
+                            results.append({
+                                "name": name,
+                                "label": labels[0] if labels else "Unknown",
+                                "relations": f"{entity_name}({rel_type})",
+                            })
+                except Exception as e:
+                    logger.debug("neo4j: 2-hop query failed: %s", e)
 
         return results
 

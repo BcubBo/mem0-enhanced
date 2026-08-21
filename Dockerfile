@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制代码
 COPY wrapper/ ./wrapper/
 COPY security/ ./security/
-COPY api_server.py .
+COPY mem0x_server.py .
 
 # 创建数据目录
 RUN mkdir -p /app/data
@@ -32,4 +32,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:28768/health || exit 1
 
-CMD ["python", "api_server.py"]
+CMD ["python", "mem0x_server.py"]
