@@ -44,7 +44,7 @@ class _Client:
         try:
             return self.request(method, path, **kwargs)
         except Exception as e:
-            logger.debug("mem0x request failed: %s", e)
+            logger.warning("mem0x request failed: %s - %s", type(e).__name__, e)
             return None
 
 
@@ -80,7 +80,7 @@ def _get_client() -> _Client:
 
 
 def _get_user_id() -> str:
-    return _load_config().get("user_id", "yang")
+    return _load_config().get("user_id", "bo")
 
 
 def _get_agent_id() -> str:
@@ -262,8 +262,13 @@ class Mem0RemoteProvider:
         if tool_name == "mem0_add":
             content = args.get("content", "")
             metadata = _get_sender_metadata()
+            # 确保 messages 是列表格式
+            if isinstance(content, str):
+                messages = [{"role": "user", "content": content}]
+            else:
+                messages = content
             body = {
-                "messages": content,
+                "messages": messages,
                 "user_id": _get_user_id(),
                 "agent_id": _get_agent_id(),
                 "infer": False,

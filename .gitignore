@@ -9,3 +9,4 @@ data/
 config.json
 !config.json.example
 *.tar.gz
+*.bak
