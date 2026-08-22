@@ -871,4 +871,33 @@ if __name__ == "__main__":
     host = server.get("host", "127.0.0.1")
     port = server.get("port", 28768)
     logger.info("启动服务: %s:%d", host, port)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+
+    # uvicorn 日志格式：带时间戳，与 httpx/bMem0X 统一
+    _log_fmt = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+    _log_datefmt = "%H:%M:%S"
+    uvicorn_log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {"format": _log_fmt, "datefmt": _log_datefmt},
+            "access": {"format": _log_fmt, "datefmt": _log_datefmt},
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stderr",
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+        },
+    }
+    uvicorn.run(app, host=host, port=port, log_level="info", log_config=uvicorn_log_config)
