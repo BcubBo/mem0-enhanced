@@ -313,16 +313,6 @@ async def search_memory(req: SearchRequest, request: Request):
     except Exception as e:
         logger.debug("neo4j query 失败: %s", e)
         DegradationTracker.record_degradation("neo4j", str(e))
-
-    # 合并 Neo4j 结果到主结果（去重）
-    if neo4j_results:
-        existing_ids = {r.get("id") for r in results}
-        for nr in neo4j_results:
-            nr_id = nr.get("id", f"neo4j:{nr.get('name', '')}")
-            if nr_id not in existing_ids:
-                results.append(nr)
-                existing_ids.add(nr_id)
-
     # 5维打分
     try:
         from wrapper.mem0_runtime import load_config
@@ -374,15 +364,22 @@ async def search_memory(req: SearchRequest, request: Request):
         results = results[:req.limit]
 
 
+# Neo4j 图谱联想追加（格式化 + 动态score）
     if neo4j_results:
         for nr in neo4j_results:
-            rel_text = f" 关联: {nr['relations']}" if nr.get("relations") else ""
+            # 基于关系数量计算score：base 0.2 + 每个关系+0.05，上限0.6
+            relations = nr.get("relations", [])
+            if isinstance(relations, str):
+                relations = [r.strip() for r in relations.split(",") if r.strip()]
+            relation_bonus = min(len(relations) * 0.05, 0.4)
+            score = 0.2 + relation_bonus
+            
+            rel_text = f" 关联: {nr["relations"]}" if nr.get("relations") else ""
             results.append({
-                "id": f"neo4j:{nr['name']}",
-                "memory": f"[{nr['label']}] {nr['name']}{rel_text}",
-                "score": 0.3,
+                "id": f"neo4j:{nr["name"]}",
+                "memory": f"[{nr["label"]}] {nr["name"]}{rel_text}",
+                "score": round(score, 2),
             })
-
     elapsed_ms = int((time.time() - start) * 1000)
     return {
         "results": results,
