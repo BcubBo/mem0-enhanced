@@ -10,6 +10,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 安装spaCy英文小模型（mem0硬编码依赖，本地tar避免GitHub超时）
+COPY en_core_web_sm-3.8.0.tar.gz /tmp/
+RUN tar xzf /tmp/en_core_web_sm-3.8.0.tar.gz -C /usr/local/lib/python3.12/site-packages/ && rm -rf /tmp/*.tar.gz
+
 # 复制代码
 COPY wrapper/ ./wrapper/
 COPY security/ ./security/
