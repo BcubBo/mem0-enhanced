@@ -114,7 +114,7 @@ def _get_sender_metadata() -> dict:
 # ═══════════════════════════════════════════════════
 
 class Mem0RemoteProvider:
-    """bo-mem0-enhanced MemoryProvider（HTTP 远程调用）。"""
+    """mem0x MemoryProvider（HTTP 远程调用）。"""
 
     name = "mem0x"
 
