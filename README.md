@@ -21,6 +21,39 @@
 ```
 mem0x/
 ├── mem0x_server.py        # FastAPI 服务入口
+├── plugin/                # Hermes 插件
+│   ├── __init__.py        # MemoryProvider 实现
+│   ├── plugin.yaml        # 插件元数据
+│   └── mem0x.json.example # 配置示例
+├── wrapper/               # 核心模块
+│   ├── mem0_runtime.py    # mem0 运行时
+│   ├── auto_expire.py     # 自动过期
+│   ├── consolidation.py   # 记忆整合
+│   ├── core_memory.py     # 核心记忆
+│   ├── evolve_mem.py      # 自进化
+│   ├── reflect.py         # 反思引擎
+│   ├── neo4j_hook.py      # Neo4j 集成（2跳图谱联想）
+│   ├── salience.py        # 显著性引擎
+│   ├── graph_export.py    # 图谱导出
+│   ├── hot_archive.py     # 热知识归档
+│   └── version_tracker.py # 版本追踪
+├── security/              # 安全模块
+│   ├── pipeline.py        # 安全写入管道
+│   ├── scoring.py         # 6维打分
+│   ├── conflict_resolver.py # 矛盾消解（实体对齐+规则收窄）
+│   ├── dedup.py           # Jaccard 去重
+│   ├── injection_guard.py # 注入防御
+│   └── self_edit.py       # LLM 语义判重
+├── Dockerfile
+├── docker-compose.mem0x.yml
+├── requirements.txt
+└── config.json.example
+```
+
+
+```
+mem0x/
+├── mem0x_server.py        # FastAPI 服务入口
 ├── mem0x/                 # Hermes 插件
 │   ├── __init__.py        # MemoryProvider 实现
 │   ├── plugin.yaml        # 插件元数据
