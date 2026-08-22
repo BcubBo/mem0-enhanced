@@ -190,7 +190,7 @@ class Mem0RemoteProvider:
             }
             if metadata:
                 body["metadata"] = metadata
-            client.try_request("POST", "/add", body=body, timeout=20.0)
+            client.try_request("POST", "/add", body=body, timeout=60.0)
 
         threading.Thread(target=_write, daemon=True).start()
 
@@ -213,7 +213,7 @@ class Mem0RemoteProvider:
                 "user_id": _get_user_id(),
                 "agent_id": _get_agent_id(),
                 "infer": True,
-            }, timeout=20.0)
+            }, timeout=60.0)
 
         threading.Thread(target=_write, daemon=True).start()
         return None
@@ -231,7 +231,7 @@ class Mem0RemoteProvider:
                 "agent_id": _get_agent_id(),
                 "infer": True,
                 "metadata": {"source": "MEMORY.md", "action": action},
-            }, timeout=20.0)
+            }, timeout=60.0)
 
         threading.Thread(target=_write, daemon=True).start()
 
@@ -275,7 +275,7 @@ class Mem0RemoteProvider:
             }
             if metadata:
                 body["metadata"] = metadata
-            result = client.try_request("POST", "/add", body=body, timeout=20.0)
+            result = client.try_request("POST", "/add", body=body, timeout=60.0)
 
         elif tool_name == "mem0_search":
             query = args.get("query", "")
