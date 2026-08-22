@@ -1,7 +1,6 @@
 """
 mem0 运行时：单例管理 + 配置加载 + rerank
 
-参考 aiduMEI ducky/mem0_runtime.py，精简版
 """
 import json
 import logging

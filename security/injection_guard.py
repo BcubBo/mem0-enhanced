@@ -1,7 +1,5 @@
 """三层 Prompt 注入防御 — 存储型注入检测 + 内容清理。
 
-移植自 aiduMEI v19.2.0 (MIT License) by monkey2jack
-https://github.com/monkey2jack/aiduMEI
 """
 from __future__ import annotations
 

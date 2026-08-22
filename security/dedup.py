@@ -1,7 +1,5 @@
 """写入去重 — mem0_add 前检查重复，Jaccard >0.85 则更新而非新增。
 
-移植思路来自 aiduMEI v19.2.0 (MIT License) layer1_selfcheck.py
-https://github.com/monkey2jack/aiduMEI
 """
 from __future__ import annotations
 

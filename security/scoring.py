@@ -1,7 +1,5 @@
 """五维打分 + Ignition — 搜索结果后处理引擎。
 
-核心逻辑移植自 aiduMEI v19.2.0 (MIT License) scoring.py + recall_funnel.py
-https://github.com/monkey2jack/aiduMEI
 
 功能：
 1. 五维打分（向量 + BM25 + 时间衰减 + 可靠性 + 热度）

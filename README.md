@@ -26,61 +26,29 @@ mem0x/
 │   ├── plugin.yaml        # 插件元数据
 │   └── mem0x.json.example # 配置示例
 ├── wrapper/               # 核心模块
-│   ├── mem0_runtime.py    # mem0 运行时
-│   ├── auto_expire.py     # 自动过期
-│   ├── consolidation.py   # 记忆整合
-│   ├── core_memory.py     # 核心记忆
-│   ├── evolve_mem.py      # 自进化
+│   ├── mem0_runtime.py    # mem0 运行时（单例+配置+rerank）
+│   ├── auto_expire.py     # 自动过期（Qdrant scroll，零 embedding）
+│   ├── consolidation.py   # 记忆整合（碎片合并）
+│   ├── core_memory.py     # 核心记忆管理
+│   ├── evolve_mem.py      # 自进化（LLM 质量分析）
 │   ├── reflect.py         # 反思引擎
 │   ├── neo4j_hook.py      # Neo4j 集成（2跳图谱联想）
-│   ├── salience.py        # 显著性引擎
+│   ├── salience.py        # 显著性引擎（热度追踪）
 │   ├── graph_export.py    # 图谱导出
 │   ├── hot_archive.py     # 热知识归档
 │   └── version_tracker.py # 版本追踪
 ├── security/              # 安全模块
-│   ├── pipeline.py        # 安全写入管道
-│   ├── scoring.py         # 6维打分
+│   ├── pipeline.py        # 安全写入管道（PII脱敏）
+│   ├── scoring.py         # 6维打分 + Ignition
 │   ├── conflict_resolver.py # 矛盾消解（实体对齐+规则收窄）
 │   ├── dedup.py           # Jaccard 去重
-│   ├── injection_guard.py # 注入防御
-│   └── self_edit.py       # LLM 语义判重
+│   ├── injection_guard.py # 三层注入防御（L1-L4）
+│   ├── self_edit.py       # LLM 语义判重
+│   └── degradation.py     # 降级追踪器
 ├── Dockerfile
 ├── docker-compose.mem0x.yml
 ├── requirements.txt
-└── config.json.example
-```
-
-
-```
-mem0x/
-├── mem0x_server.py        # FastAPI 服务入口
-├── mem0x/                 # Hermes 插件
-│   ├── __init__.py        # MemoryProvider 实现
-│   ├── plugin.yaml        # 插件元数据
-│   └── mem0x.json.example # 配置示例
-├── wrapper/               # 核心模块
-│   ├── mem0_runtime.py    # mem0 运行时
-│   ├── auto_expire.py     # 自动过期
-│   ├── consolidation.py   # 记忆整合
-│   ├── core_memory.py     # 核心记忆
-│   ├── evolve_mem.py      # 自进化
-│   ├── reflect.py         # 反思引擎
-│   ├── neo4j_hook.py      # Neo4j 集成（2跳图谱联想）
-│   ├── salience.py        # 显著性引擎
-│   ├── graph_export.py    # 图谱导出
-│   ├── hot_archive.py     # 热知识归档
-│   └── version_tracker.py # 版本追踪
-├── security/              # 安全模块
-│   ├── pipeline.py        # 安全写入管道
-│   ├── scoring.py         # 6维打分
-│   ├── conflict_resolver.py # 矛盾消解（实体对齐+规则收窄）
-│   ├── dedup.py           # Jaccard 去重
-│   ├── injection_guard.py # 注入防御
-│   └── self_edit.py       # LLM 语义判重
-├── Dockerfile
-├── docker-compose.mem0x.yml
-├── requirements.txt
-└── config.json.example
+└── config-compose.json.example
 ```
 
 ## 快速开始
@@ -98,7 +66,7 @@ cp config-compose.json.example ~/.mem0x/config-compose.json
 # 编辑 ~/.mem0x/config-compose.json 填入你的 API key
 
 # 构建并启动
-docker build -t mem0xapi:0.1.3 .
+docker build -t mem0xapi:0.1.5 .
 docker compose -f docker-compose.mem0x.yml up -d
 
 # 验证
@@ -158,6 +126,7 @@ Docker 部署时，服务地址必须使用 Docker 网络名称：
 |------|------|
 | `MEM0X_CONFIG` | 配置文件路径 |
 | `MEM0X_HOME` | 配置和数据根目录（默认 `~/.mem0x`） |
+| `MEM0_TELEMETRY` | 遥测开关（设为 `False` 禁用 PostHog） |
 
 ## API 端点
 
@@ -215,10 +184,10 @@ Docker 部署时，服务地址必须使用 Docker 网络名称：
 
 ```bash
 # 复制插件到 Hermes profile
-cp -r mem0x/ ~/.hermes/profiles/your-profile/plugins/mem0x/
+cp -r plugin/ ~/.hermes/profiles/your-profile/plugins/mem0x/
 
 # 复制配置
-cp mem0x/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
+cp plugin/mem0x.json.example ~/.hermes/profiles/your-profile/mem0x.json
 # 编辑 mem0x.json 设置 service_url（指向 mem0x API 服务地址）
 ```
 

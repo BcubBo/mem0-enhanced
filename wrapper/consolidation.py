@@ -1,7 +1,6 @@
 """consolidation — 记忆整合模块
 
 合并相似碎片记忆，减少冗余。
-参考 aizuMEI ducky/background/consolidation.py
 """
 from __future__ import annotations
 

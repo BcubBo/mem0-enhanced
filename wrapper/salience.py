@@ -1,6 +1,5 @@
 """salience — 显著性引擎（SQLite，简化版）
 
-参考 aiduMEI ducky/salience/，保留核心功能：
 - 写入时注册 salience
 - 搜索时 boost 访问热度
 - 时间衰减

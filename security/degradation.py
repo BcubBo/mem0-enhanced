@@ -1,7 +1,5 @@
 """降级追踪器 — 记录系统组件降级状态，5分钟自愈。
 
-移植自 aiduMEI v19.2.0 (MIT License) by monkey2jack
-https://github.com/monkey2jack/aiduMEI
 """
 from __future__ import annotations
 
