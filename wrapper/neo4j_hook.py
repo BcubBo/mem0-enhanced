@@ -142,8 +142,8 @@ def _extract_entities(text: str) -> Dict[str, List]:
         for m in re.finditer(pattern, text):
             src = m.group(1).strip()
             obj = m.group(3).strip()
-            src = re.sub(r'[，。、；：""''！？\s]+', '', src)
-            obj = re.sub(r'[，。、；：""''！？\s]+', '', obj)
+            src = re.sub("[，。、；：""""！？\\s]+", "", src)
+            obj = re.sub("[，。、；：""""！？\\s]+", "", obj)
             if len(src) >= 2 and len(obj) >= 2 and src != obj:
                 relations.append({"from": src, "to": obj, "type": rel_type})
                 for name in (src, obj):
