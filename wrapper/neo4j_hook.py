@@ -142,8 +142,8 @@ def _extract_entities(text: str) -> Dict[str, List]:
         for m in re.finditer(pattern, text):
             src = m.group(1).strip()
             obj = m.group(3).strip()
-            src = re.sub("[，。、；：""""！？\\s]+", "", src)
-            obj = re.sub("[，。、；：""""！？\\s]+", "", obj)
+            src = re.sub(r'[，。、；：“”‘’！？ \t\n\r\f]+', '', src)
+            obj = re.sub(r'[，。、；：“”‘’！？ \t\n\r\f]+', '', obj)
             if len(src) >= 2 and len(obj) >= 2 and src != obj:
                 relations.append({"from": src, "to": obj, "type": rel_type})
                 for name in (src, obj):
@@ -269,7 +269,7 @@ class Neo4jHook:
                     try:
                         session.run(
                             "MERGE (n {name: toLower($name)}) "
-                            "SET n:{etype}, n.original_name = $name, "
+                            "SET n:$etype, n.original_name = $name, "
                             "n.source_memory_id = CASE "
                             "  WHEN n.source_memory_id IS NULL THEN $mid "
                             "  ELSE n.source_memory_id + ',' + $mid END",
